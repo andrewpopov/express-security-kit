@@ -32,13 +32,18 @@ npm install ioredis
 Mount in this order. Later phases slot in where marked:
 
 ```
-helmet  →  rate-limit (Tier 1: per-IP flood)  →  [api-key auth]  →
+helmet  →  rate-limit (Tier 1: per-IP flood)  →  api-key auth  →
 rate-limit (Tier 2: per-principal)  →  [request signing]  →  routes
 ```
 
 Security headers first, then a coarse flood guard *before* you spend CPU on auth,
-then identity-aware fair-share limiting *after* auth has populated
-`req.securityContext`.
+then the API-key verifier (which populates `req.securityContext`), then
+identity-aware fair-share limiting *after* that context exists. `[request
+signing]` is Phase 3.
+
+> **Fail direction differs by layer.** The rate limiter **fails open** (a store
+> outage must not take the service down); the API-key verifier **fails closed**
+> (any error → generic 401, request denied). That's intentional.
 
 ## Module 1 — Helmet preset
 
@@ -249,6 +254,111 @@ const apiLimiter = createRateLimiter({
 app.use(['/api/auth/login', '/api/auth/register', '/api/auth/reset-password'], authLimiter);
 app.use('/api', apiLimiter);
 ```
+
+## Module 3 — API-key auth
+
+`createApiKeyAuth(config)` verifies a presented key and populates
+`req.securityContext`. The kit owns the verification machinery; your service owns
+persistence (`lookup`), policy (`onAuthenticated`, `requireScope`), and audit
+(`onFailure`).
+
+Pipeline: extract key (Bearer or custom header) → prefix check → constant-time
+static bootstrap keys → hash + `lookup` → re-verify stored hash (defense in
+depth) → expiry → IP allowlist → build context. It **fails closed**: every
+failure — including a throwing `lookup` — returns a **generic** `401`/`403`
+(`{ error: { code: 'UNAUTHORIZED' | 'FORBIDDEN', message } }`). The specific
+reason (`missing`, `malformed`, `bad_prefix`, `not_found`, `hash_mismatch`,
+`expired`, `ip_denied`, `error`) goes ONLY to your `onFailure` hook — never to
+the client.
+
+**Sharp edges worth knowing:**
+
+- **IP allowlist is exact-match, proxy-dependent.** `allowedIps` is an EXACT
+  string comparison against `req.ip` — **no CIDR or range support**. It is only
+  as trustworthy as your Express `trust proxy` setting: a too-broad
+  `trust proxy` lets a client spoof `X-Forwarded-For` and defeat the allowlist.
+  `'*'` disables the check; an undefined `req.ip` is denied unless `''` is
+  explicitly listed.
+- **`optional` mode is narrow.** Only a genuinely ABSENT credential (no/empty
+  header) passes through as anonymous. A PRESENT-but-malformed credential
+  (`Authorization: Basic x`, a bare `Bearer`) is a failed auth attempt and still
+  returns 401.
+- **Invalid expiry = expired.** A corrupt `expiresAt` (an Invalid Date) is
+  treated as expired, never as "no expiry".
+- **Audit hooks must not respond.** `onFailure` (and `requireScope`'s
+  `onDenied`) may be async; a returned promise's rejection is caught and logged.
+  They must NOT send a response — the middleware owns the 401/403.
+- **`requireScope` predicates must be synchronous.** Only a literal `true`
+  proceeds; a returned Promise is treated as misuse and denies (403).
+
+### Recipe: cairn (`cairn_` + sha256 + bot-user)
+
+```ts
+import { createApiKeyAuth, sha256Hasher } from '@andrewpopov/express-security-kit';
+
+app.use(
+  '/api/bot',
+  createApiKeyAuth({
+    prefix: 'cairn_',
+    hasher: sha256Hasher(), // default; shown for clarity
+    lookup: (hash) => db.apiKey.findByHash(hash), // returns ApiKeyRecord | null
+    // Mint a first-class bot USER context instead of a bare apiKey principal.
+    onAuthenticated: async (_req, key) => {
+      const bot = await db.botUser.forKey(key.id);
+      return {
+        principalType: 'user',
+        principalId: bot.id,
+        keyId: key.id,
+        scopes: { org: bot.orgId, projects: bot.projectIds },
+      };
+    },
+    onFailure: (req, reason) => auditLog.warn('apikey_denied', { ip: req.ip, reason }),
+  }),
+);
+```
+
+### Recipe: smarthome (`smh_` + scopedHmac + static bootstrap)
+
+```ts
+import { createApiKeyAuth, scopedHmacHasher } from '@andrewpopov/express-security-kit';
+
+app.use(
+  '/api',
+  createApiKeyAuth({
+    prefix: 'smh_',
+    // EXACT reproduction of smarthome's existing stored-key format:
+    hasher: scopedHmacHasher(process.env.KEY_SECRET!, 'integrations'),
+    lookup: (hash) => keyStore.find(hash),
+    // A CI/bootstrap key kept in an env var, authenticated as a service:
+    staticKeys: [
+      { name: 'bootstrap', value: process.env.SMH_BOOTSTRAP_KEY!, principalId: 'svc:bootstrap' },
+    ],
+  }),
+);
+```
+
+### Recipe: stoki (`ssk_ak_` + sha256 + scopes gate)
+
+```ts
+import { createApiKeyAuth, requireScope } from '@andrewpopov/express-security-kit';
+
+app.use('/api/integrations', createApiKeyAuth({
+  prefix: 'ssk_ak_',
+  lookup: (hash) => keys.byHash(hash), // record.scopes = { allowedActions: [...] }
+}));
+
+// requireScope ships only the MECHANISM; the predicate is stoki's policy.
+const canWrite = requireScope((ctx) => {
+  const actions = (ctx?.scopes as { allowedActions?: string[] } | undefined)?.allowedActions;
+  return Array.isArray(actions) && actions.includes('write');
+});
+
+app.post('/api/integrations/sync', canWrite, syncHandler);
+```
+
+`record.rateLimitOverride` flows straight into the rate limiter's default
+override resolver, so a per-key limit set at issue time is honored automatically
+by a downstream `createRateLimiter`.
 
 ## Stores
 

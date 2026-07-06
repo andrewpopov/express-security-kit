@@ -35,6 +35,27 @@ export type {
 
 export type { SecurityContext } from './types';
 
+export { createApiKeyAuth } from './api-key/createApiKeyAuth';
+export {
+  sha256Hasher,
+  scopedHmacHasher,
+  timingSafeEqualHex,
+} from './api-key/hashers';
+export { requireScope } from './api-key/requireScope';
+export type {
+  ApiKeyRecord,
+  KeyHasher,
+  ApiKeyAuthConfig,
+  ApiKeyStaticKey,
+  ApiKeyFailureReason,
+  ApiKeyAuthLogger,
+} from './api-key/types';
+export type {
+  ScopePredicate,
+  RequireScopeOptions,
+  RequireScopeLogger,
+} from './api-key/requireScope';
+
 // Note: the Redis store is intentionally NOT exported here. Import it from the
 // '@andrewpopov/express-security-kit/redis-store' subpath so the core entry
 // never references ioredis.

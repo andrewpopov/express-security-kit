@@ -56,6 +56,30 @@ export type {
   RequireScopeLogger,
 } from './api-key/requireScope';
 
+export {
+  buildCanonicalString,
+  signRequest,
+  sha256Hex,
+} from './signing/signRequest';
+export type {
+  CanonicalStringInput,
+  SignRequestInput,
+  SignedRequest,
+} from './signing/signRequest';
+export { createRequestSigningVerifier } from './signing/createRequestSigningVerifier';
+export type {
+  RequestSigningVerifierConfig,
+  SigningFailureReason,
+  SigningLogger,
+  SigningHeaderNames,
+  SecretResolver,
+} from './signing/createRequestSigningVerifier';
+export { MemoryNonceStore } from './signing/nonceStore';
+export type {
+  NonceStore,
+  MemoryNonceStoreOptions,
+} from './signing/nonceStore';
+
 // Note: the Redis store is intentionally NOT exported here. Import it from the
 // '@andrewpopov/express-security-kit/redis-store' subpath so the core entry
 // never references ioredis.

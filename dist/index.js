@@ -2,7 +2,7 @@
 // Shorthand re-exports (no renaming) so cjs-module-lexer statically detects the
 // named exports for ESM consumers of the CommonJS build.
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.requireScope = exports.timingSafeEqualHex = exports.scopedHmacHasher = exports.sha256Hasher = exports.createApiKeyAuth = exports.decodedJwtKey = exports.verifiedIdentityKey = exports.ipKey = exports.defaultKeyGenerator = exports.MemoryRateLimitStore = exports.createRateLimiter = exports.createHelmetMiddleware = void 0;
+exports.MemoryNonceStore = exports.createRequestSigningVerifier = exports.sha256Hex = exports.signRequest = exports.buildCanonicalString = exports.requireScope = exports.timingSafeEqualHex = exports.scopedHmacHasher = exports.sha256Hasher = exports.createApiKeyAuth = exports.decodedJwtKey = exports.verifiedIdentityKey = exports.ipKey = exports.defaultKeyGenerator = exports.MemoryRateLimitStore = exports.createRateLimiter = exports.createHelmetMiddleware = void 0;
 var createHelmetMiddleware_1 = require("./helmet/createHelmetMiddleware");
 Object.defineProperty(exports, "createHelmetMiddleware", { enumerable: true, get: function () { return createHelmetMiddleware_1.createHelmetMiddleware; } });
 var createRateLimiter_1 = require("./rate-limit/createRateLimiter");
@@ -22,6 +22,14 @@ Object.defineProperty(exports, "scopedHmacHasher", { enumerable: true, get: func
 Object.defineProperty(exports, "timingSafeEqualHex", { enumerable: true, get: function () { return hashers_1.timingSafeEqualHex; } });
 var requireScope_1 = require("./api-key/requireScope");
 Object.defineProperty(exports, "requireScope", { enumerable: true, get: function () { return requireScope_1.requireScope; } });
+var signRequest_1 = require("./signing/signRequest");
+Object.defineProperty(exports, "buildCanonicalString", { enumerable: true, get: function () { return signRequest_1.buildCanonicalString; } });
+Object.defineProperty(exports, "signRequest", { enumerable: true, get: function () { return signRequest_1.signRequest; } });
+Object.defineProperty(exports, "sha256Hex", { enumerable: true, get: function () { return signRequest_1.sha256Hex; } });
+var createRequestSigningVerifier_1 = require("./signing/createRequestSigningVerifier");
+Object.defineProperty(exports, "createRequestSigningVerifier", { enumerable: true, get: function () { return createRequestSigningVerifier_1.createRequestSigningVerifier; } });
+var nonceStore_1 = require("./signing/nonceStore");
+Object.defineProperty(exports, "MemoryNonceStore", { enumerable: true, get: function () { return nonceStore_1.MemoryNonceStore; } });
 // Note: the Redis store is intentionally NOT exported here. Import it from the
 // '@andrewpopov/express-security-kit/redis-store' subpath so the core entry
 // never references ioredis.

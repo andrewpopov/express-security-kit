@@ -33,17 +33,18 @@ Mount in this order. Later phases slot in where marked:
 
 ```
 helmet  →  rate-limit (Tier 1: per-IP flood)  →  api-key auth  →
-rate-limit (Tier 2: per-principal)  →  [request signing]  →  routes
+signing verifier  →  rate-limit (Tier 2: per-principal)  →  requireScope  →  routes
 ```
 
 Security headers first, then a coarse flood guard *before* you spend CPU on auth,
-then the API-key verifier (which populates `req.securityContext`), then
-identity-aware fair-share limiting *after* that context exists. `[request
-signing]` is Phase 3.
+then the API-key verifier (which populates `req.securityContext`, including a
+per-key `hmacSecret`), then the signing verifier (which reads that secret), then
+identity-aware fair-share limiting and scope guards, then your routes.
 
 > **Fail direction differs by layer.** The rate limiter **fails open** (a store
-> outage must not take the service down); the API-key verifier **fails closed**
-> (any error → generic 401, request denied). That's intentional.
+> outage must not take the service down); the API-key verifier and the **signing
+> verifier fail closed** (any error — including an unavailable nonce store — →
+> generic 401, request denied). That's intentional.
 
 ## Module 1 — Helmet preset
 
@@ -359,6 +360,105 @@ app.post('/api/integrations/sync', canWrite, syncHandler);
 `record.rateLimitOverride` flows straight into the rate limiter's default
 override resolver, so a per-key limit set at issue time is honored automatically
 by a downstream `createRateLimiter`.
+
+## Module 4 — HMAC request signing + replay protection
+
+**Opt-in.** For high-value machine-to-machine routes you can require that each
+request be HMAC-signed and single-use. `createRequestSigningVerifier(config)`
+verifies the signature and consumes the nonce; `signRequest(...)` is the
+client-side helper that produces compatible headers. The scheme is byte-for-byte
+compatible with stoki's existing signed clients.
+
+### The scheme
+
+Canonical string = five LF-joined lines:
+
+```
+METHOD (uppercase)
+originalUrl (path + query, exactly as received)
+timestampMs
+nonce
+sha256hex(body)          # GET/HEAD → sha256hex('')
+```
+
+Signature = `HMAC-SHA256(secret, canonical)` as lowercase hex, sent as
+`X-Signature` with `X-Timestamp` (ms epoch) and `X-Nonce`.
+
+### Client side
+
+```ts
+import { signRequest } from '@andrewpopov/express-security-kit';
+
+const { headers } = signRequest({
+  secret,
+  method: 'POST',
+  url: '/api/lists/abc123/items?sort=name', // must equal server's req.originalUrl
+  timestampMs: Date.now(),
+  nonce: crypto.randomUUID(),               // matches /^[A-Za-z0-9:_-]{8,128}$/
+  body: rawJsonStringYouActuallySend,       // the EXACT bytes on the wire
+});
+// send headers['X-Timestamp' | 'X-Nonce' | 'X-Signature'] with the request
+```
+
+### Server side — per-key secret (recommended)
+
+```ts
+import {
+  createRequestSigningVerifier,
+  MemoryNonceStore,
+} from '@andrewpopov/express-security-kit';
+
+const nonceStore = new MemoryNonceStore(); // per-process — see caveat below
+
+app.use('/api/signed', createRequestSigningVerifier({
+  // The api-key verifier ran first and set securityContext.hmacSecret.
+  secret: (_req, ctx) => ctx?.hmacSecret ?? undefined, // undefined → fail closed
+  nonceStore,
+  maxSkewSeconds: 300, // clamped to [30, 900]
+  onFailure: (req, reason) => auditLog.warn('signing_denied', { reason, ip: req.ip }),
+}));
+```
+
+### Server side — global secret
+
+```ts
+app.use('/api/webhook', createRequestSigningVerifier({
+  secret: process.env.WEBHOOK_SIGNING_SECRET!, // static shared secret
+  nonceStore,
+}));
+```
+
+### ⚠️ rawBody capture is REQUIRED for signed bodies
+
+The verifier hashes the request body. By default it uses `req.rawBody` — the
+**exact bytes received** — and only falls back to `JSON.stringify(req.body)` if
+that is absent. **`JSON.stringify` of a parsed object is NOT guaranteed to equal
+the client's original bytes** (key ordering, whitespace, unicode escaping,
+number formatting all differ), so without rawBody, signature checks on JSON
+bodies can spuriously fail. Capture rawBody with express.json's `verify` hook:
+
+```ts
+app.use(express.json({
+  verify: (req, _res, buf) => { (req as any).rawBody = buf; },
+}));
+```
+
+GET/HEAD requests have no body (hashed as `''`), so they don't need this.
+
+### Replay protection & the nonce store
+
+After the signature is proven valid (and before `next()`), the nonce is consumed
+via `nonceStore.consume(scope, nonce, ttlMs)` where `ttlMs` = the skew window.
+A second use of the same nonce within that window → 401. The `scope` defaults to
+`ctx.keyId ?? ctx.principalId ?? 'global'`, so one key's nonces never collide
+with another's.
+
+> **`MemoryNonceStore` is PER-PROCESS.** In a clustered / multi-instance
+> deployment it provides NO cross-instance replay protection — a replay routed
+> to a different instance won't be detected. Inject a **persistent shared store**
+> (Prisma, Redis, …) implementing the `NonceStore` interface
+> (`consume(scope, nonce, ttlMs): Promise<'ok' | 'replay'>`) for those
+> deployments. A thrown/rejected `consume` makes the verifier **fail closed**.
 
 ## Stores
 

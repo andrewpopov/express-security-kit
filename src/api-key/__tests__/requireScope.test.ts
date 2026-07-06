@@ -86,7 +86,10 @@ describe('requireScope', () => {
     const asyncPredicate = (() => Promise.resolve(true)) as unknown as Parameters<
       typeof requireScope
     >[0];
-    const out = invoke(requireScope(asyncPredicate), makeReq({ principalType: 'apiKey' }));
+    const out = invoke(
+      requireScope(asyncPredicate, { logger: { warn: vi.fn() } }),
+      makeReq({ principalType: 'apiKey' }),
+    );
     expect(out.nextCalled).toBe(false);
     expect(out.status).toBe(403);
   });

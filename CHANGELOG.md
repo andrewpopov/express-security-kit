@@ -17,6 +17,42 @@ CHANGELOG entry.
 
 ---
 
+## 0.3.0
+
+Phase 3 — OPT-IN HMAC request signing + replay protection (audit is Phase 4).
+
+### Added
+
+- **`createRequestSigningVerifier(config)`** — Express middleware that verifies
+  an HMAC-SHA256 request signature and enforces single-use nonces. Byte-for-byte
+  compatible with stoki's live scheme (locked to authoritative golden vectors).
+  Resolves a static or per-key secret (`securityContext.hmacSecret`), enforces
+  timestamp skew (default 300s, clamped [30, 900]), a nonce format, and a
+  64-hex signature; recomputes the expected signature and compares it
+  constant-time; then consumes the nonce for replay protection AFTER the
+  signature is proven valid and BEFORE `next()`. **Fails CLOSED** on every
+  failure — including an unavailable nonce store — with a generic 401; the
+  reason goes only to `onFailure`.
+- **`signRequest(input)` / `buildCanonicalString(input)` / `sha256Hex(input)`**
+  — client/service helpers to produce compatible signatures and headers
+  (`X-Timestamp`, `X-Nonce`, `X-Signature`). The canonical string is five
+  LF-joined lines: METHOD, url, timestampMs, nonce, sha256hex(body) (GET/HEAD →
+  sha256hex('')).
+- **`NonceStore` interface + `MemoryNonceStore`** — replay store keyed by
+  `${scope}:sha256(nonce)` with per-entry TTL, an `unref`'d cleanup timer, a cap
+  with drop-oldest eviction, and `stop()`/`dispose()`. Documented as PER-PROCESS
+  — multi-instance deployments MUST inject a persistent shared store (Prisma /
+  Redis) implementing `NonceStore`. At capacity, `MemoryNonceStore` prunes
+  expired entries and, if still full of LIVE nonces, FAILS CLOSED (throws →
+  verifier returns 401) rather than evicting a live nonce — evicting one would
+  reopen a replay window. A non-positive `maxTrackedNonces` is rejected at
+  construction. The verifier proceeds only on an explicit `'ok'` from the store;
+  any other result fails closed.
+- `SecurityContext` gained an optional `hmacSecret` field (populated by an
+  api-key `onAuthenticated` hook) for per-key signing; the Express `Request`
+  augmentation gained `rawBody` (captured by an express.json `verify` hook), the
+  preferred body source for signature verification.
+
 ## 0.2.0
 
 Phase 2 — API-key authentication (the verifier only; HMAC request signing is

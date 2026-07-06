@@ -83,6 +83,8 @@ try {
       'createRateLimiter', 'createHelmetMiddleware',
       'createApiKeyAuth', 'requireScope', 'sha256Hasher',
       'scopedHmacHasher', 'timingSafeEqualHex',
+      'createRequestSigningVerifier', 'signRequest',
+      'buildCanonicalString', 'MemoryNonceStore',
     ].filter((n) => typeof mod[n] !== 'function');
     if (missing.length) {
       console.error('CJS missing exports: ' + missing.join(', '));
@@ -111,11 +113,13 @@ try {
     import {
       createRateLimiter, createHelmetMiddleware,
       createApiKeyAuth, requireScope, sha256Hasher, timingSafeEqualHex,
+      createRequestSigningVerifier, signRequest, buildCanonicalString, MemoryNonceStore,
     } from '${pkg.name}';
     import { RedisRateLimitStore } from '${pkg.name}/redis-store';
     const fns = {
       createRateLimiter, createHelmetMiddleware,
       createApiKeyAuth, requireScope, sha256Hasher, timingSafeEqualHex,
+      createRequestSigningVerifier, signRequest, buildCanonicalString, MemoryNonceStore,
     };
     for (const [name, fn] of Object.entries(fns)) {
       if (typeof fn !== 'function') {

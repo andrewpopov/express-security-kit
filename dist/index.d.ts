@@ -12,3 +12,9 @@ export { sha256Hasher, scopedHmacHasher, timingSafeEqualHex, } from './api-key/h
 export { requireScope } from './api-key/requireScope';
 export type { ApiKeyRecord, KeyHasher, ApiKeyAuthConfig, ApiKeyStaticKey, ApiKeyFailureReason, ApiKeyAuthLogger, } from './api-key/types';
 export type { ScopePredicate, RequireScopeOptions, RequireScopeLogger, } from './api-key/requireScope';
+export { buildCanonicalString, signRequest, sha256Hex, } from './signing/signRequest';
+export type { CanonicalStringInput, SignRequestInput, SignedRequest, } from './signing/signRequest';
+export { createRequestSigningVerifier } from './signing/createRequestSigningVerifier';
+export type { RequestSigningVerifierConfig, SigningFailureReason, SigningLogger, SigningHeaderNames, SecretResolver, } from './signing/createRequestSigningVerifier';
+export { MemoryNonceStore } from './signing/nonceStore';
+export type { NonceStore, MemoryNonceStoreOptions, } from './signing/nonceStore';

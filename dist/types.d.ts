@@ -21,6 +21,13 @@ export interface SecurityContext {
         windowMs: number;
         max: number;
     };
+    /**
+     * Per-key HMAC secret for request signing (Phase 3). Typically copied from the
+     * authenticated ApiKeyRecord.hmacSecret by an `onAuthenticated` hook so the
+     * signing verifier's secret resolver can read it off the context. Treat as
+     * sensitive; it lives only in the in-memory request context.
+     */
+    hmacSecret?: string | null;
 }
 declare global {
     namespace Express {
@@ -30,6 +37,12 @@ declare global {
              * requests (and requests that ran before auth middleware) will not have it.
              */
             securityContext?: SecurityContext;
+            /**
+             * Raw received request body bytes, captured by an express.json `verify`
+             * hook. The signing verifier prefers this over re-serialized `req.body`
+             * so the hashed bytes match exactly what the client signed.
+             */
+            rawBody?: string | Buffer;
         }
     }
 }

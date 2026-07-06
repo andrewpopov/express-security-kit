@@ -17,6 +17,39 @@ CHANGELOG entry.
 
 ---
 
+## 0.2.0
+
+Phase 2 — API-key authentication (the verifier only; HMAC request signing is
+Phase 3, audit is Phase 4).
+
+### Added
+
+- **`createApiKeyAuth(config)`** — Express API-key verifier. Extracts the key
+  (Bearer or a custom header), enforces a required prefix, checks constant-time
+  static bootstrap keys before DB lookup, hashes + looks up DB-backed keys,
+  re-verifies the stored hash (defense in depth), and enforces expiry and an
+  optional IP allowlist (with `*` wildcard). Sets `req.securityContext` — either
+  a default `apiKey`/`service` context or one minted by an async
+  `onAuthenticated` hook. **Fails CLOSED**: every failure (including a throwing
+  `lookup`) returns a GENERIC 401/403; the specific reason goes only to the
+  `onFailure` audit hook, never to the client.
+- **Hashers** — `sha256Hasher()` and `scopedHmacHasher(secret, scope)` (exact
+  smarthome `HMAC-SHA256(secret:scope, rawKey)` format), plus
+  `timingSafeEqualHex(a, b)` — a constant-time hex/ASCII compare that returns
+  false on length mismatch without an early-out timing leak and never throws.
+- **`requireScope(predicate, opts?)`** — a tiny guard-builder that runs a
+  service-provided policy predicate against `req.securityContext`. The predicate
+  MUST be SYNCHRONOUS and return a strict boolean: only a literal `true`
+  proceeds; `false`, any truthy non-boolean, a returned Promise (async misuse),
+  or a thrown predicate all deny with a generic 403 (fail closed). The kit ships
+  only the mechanism; services own the policy.
+- IP allowlist matching is documented as an EXACT `req.ip` string compare (no
+  CIDR/ranges) that relies on a correct Express `trust proxy`; an invalid
+  `expiresAt` Date is treated as expired; and in `optional` mode only a
+  genuinely absent credential passes through (a present-but-malformed credential
+  is still a 401). Audit hooks (`onFailure`, `onDenied`) may be async — their
+  rejections are caught and logged and must not send responses.
+
 ## 0.1.0
 
 Initial release. Phase 1 scope: the security MACHINERY only — consuming

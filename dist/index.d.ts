@@ -7,3 +7,8 @@ export type { RateLimitStore, HitResult, MemoryRateLimitStoreOptions, } from './
 export { defaultKeyGenerator, ipKey, verifiedIdentityKey, decodedJwtKey, } from './rate-limit/keyGenerator';
 export type { KeyGenerator, DecodedJwtKeyOptions, } from './rate-limit/keyGenerator';
 export type { SecurityContext } from './types';
+export { createApiKeyAuth } from './api-key/createApiKeyAuth';
+export { sha256Hasher, scopedHmacHasher, timingSafeEqualHex, } from './api-key/hashers';
+export { requireScope } from './api-key/requireScope';
+export type { ApiKeyRecord, KeyHasher, ApiKeyAuthConfig, ApiKeyStaticKey, ApiKeyFailureReason, ApiKeyAuthLogger, } from './api-key/types';
+export type { ScopePredicate, RequireScopeOptions, RequireScopeLogger, } from './api-key/requireScope';

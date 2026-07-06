@@ -79,8 +79,11 @@ try {
   // 2. CommonJS require smoke.
   const cjsSmoke = `
     const mod = require('${pkg.name}');
-    const missing = ['createRateLimiter', 'createHelmetMiddleware']
-      .filter((n) => typeof mod[n] !== 'function');
+    const missing = [
+      'createRateLimiter', 'createHelmetMiddleware',
+      'createApiKeyAuth', 'requireScope', 'sha256Hasher',
+      'scopedHmacHasher', 'timingSafeEqualHex',
+    ].filter((n) => typeof mod[n] !== 'function');
     if (missing.length) {
       console.error('CJS missing exports: ' + missing.join(', '));
       process.exit(2);
@@ -105,15 +108,20 @@ try {
 
   // 3. Native ESM import smoke (catches the member-expression export bug).
   const esmSmoke = `
-    import { createRateLimiter, createHelmetMiddleware } from '${pkg.name}';
+    import {
+      createRateLimiter, createHelmetMiddleware,
+      createApiKeyAuth, requireScope, sha256Hasher, timingSafeEqualHex,
+    } from '${pkg.name}';
     import { RedisRateLimitStore } from '${pkg.name}/redis-store';
-    if (typeof createRateLimiter !== 'function') {
-      console.error('ESM: createRateLimiter is not a function');
-      process.exit(2);
-    }
-    if (typeof createHelmetMiddleware !== 'function') {
-      console.error('ESM: createHelmetMiddleware is not a function');
-      process.exit(3);
+    const fns = {
+      createRateLimiter, createHelmetMiddleware,
+      createApiKeyAuth, requireScope, sha256Hasher, timingSafeEqualHex,
+    };
+    for (const [name, fn] of Object.entries(fns)) {
+      if (typeof fn !== 'function') {
+        console.error('ESM: ' + name + ' is not a function');
+        process.exit(2);
+      }
     }
     if (typeof RedisRateLimitStore !== 'function') {
       console.error('ESM: RedisRateLimitStore subpath import failed');

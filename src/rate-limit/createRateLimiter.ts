@@ -1,0 +1,280 @@
+import type { Request, Response, NextFunction, RequestHandler } from 'express';
+import { MemoryRateLimitStore, RateLimitStore } from './store';
+import {
+  defaultKeyGenerator,
+  KeyGenerator,
+} from './keyGenerator';
+
+export type RateLimitAlgorithm = 'fixed' | 'sliding';
+
+/** Minimal logger surface; defaults to console. */
+export interface RateLimiterLogger {
+  warn: (message: string, meta?: unknown) => void;
+}
+
+export interface RateLimitOverride {
+  windowMs: number;
+  max: number;
+}
+
+export interface RateLimiterConfig {
+  /** Window length in ms. */
+  windowMs: number;
+  /** Max requests per window. A function receives the request for role-aware limits. */
+  max: number | ((req: Request) => number);
+  /** 'fixed' (default) or 'sliding' window counter. */
+  algorithm?: RateLimitAlgorithm;
+  /** Key generator. Default: verifiedIdentityKey (aka defaultKeyGenerator). */
+  keyGenerator?: KeyGenerator;
+  /** Backing store. Default: a shared in-process MemoryRateLimitStore. */
+  store?: RateLimitStore;
+  /**
+   * Resolve a per-request override. Default reads
+   * `req.securityContext?.rateLimitOverride`. Return undefined for no override.
+   */
+  overrideResolver?: (req: Request) => RateLimitOverride | undefined;
+  /** Skip limiting entirely for a request (e.g. health checks, dev mode). */
+  skip?: (req: Request) => boolean;
+  /**
+   * Called when a request is rejected with 429. May be async. A throw or a
+   * rejected promise is swallowed (logged) and NEVER prevents the 429.
+   */
+  onLimit?: (req: Request, key: string) => void | Promise<unknown>;
+  /** Emit RateLimit-* + Retry-After headers. Default true. */
+  headers?: boolean;
+  /** Logger for fail-open store errors. Default: console. */
+  logger?: RateLimiterLogger;
+  /** Injectable clock for deterministic tests. Default: Date.now. */
+  now?: () => number;
+}
+
+const consoleLogger: RateLimiterLogger = {
+  warn: (message, meta) => console.warn(message, meta ?? ''),
+};
+
+/**
+ * A shared default store so multiple limiters created without an explicit
+ * `store` don't each spin up their own bucket map + timer. Tiers that must not
+ * share state should pass their own store.
+ */
+let sharedMemoryStore: MemoryRateLimitStore | undefined;
+function getSharedStore(): MemoryRateLimitStore {
+  if (!sharedMemoryStore) {
+    sharedMemoryStore = new MemoryRateLimitStore();
+  }
+  return sharedMemoryStore;
+}
+
+interface ResolvedDecision {
+  allowed: boolean;
+  limit: number;
+  remaining: number;
+  resetAt: number;
+  /** Effective count used for the decision (weighted for sliding). */
+  used: number;
+}
+
+function resolveMax(
+  config: RateLimiterConfig,
+  req: Request,
+  override: RateLimitOverride | undefined,
+): { windowMs: number; max: number } {
+  if (override) {
+    return { windowMs: override.windowMs, max: override.max };
+  }
+  const max = typeof config.max === 'function' ? config.max(req) : config.max;
+  return { windowMs: config.windowMs, max };
+}
+
+/**
+ * Apply the algorithm to a store hit to produce a decision.
+ *
+ * fixed:   reject when current > max (current already includes this hit).
+ * sliding: weighted = previous * (1 - elapsedInCurrent/windowMs) + current;
+ *          reject when weighted >= max.
+ */
+function decide(
+  algorithm: RateLimitAlgorithm,
+  hit: { current: number; previous: number; resetAt: number },
+  windowMs: number,
+  max: number,
+  now: number,
+): ResolvedDecision {
+  if (algorithm === 'sliding') {
+    const windowStart = hit.resetAt - windowMs;
+    const elapsedInCurrent = Math.min(windowMs, Math.max(0, now - windowStart));
+    const weightPrevious = Math.max(0, 1 - elapsedInCurrent / windowMs);
+    const weighted = hit.previous * weightPrevious + hit.current;
+    // `max` means the same thing across algorithms: allow up to and including
+    // `max`, reject only when the weighted estimate EXCEEDS it. In an empty
+    // window this lets exactly `max` through, matching the fixed window.
+    const allowed = weighted <= max;
+    const remaining = Math.max(0, Math.floor(max - weighted));
+    return {
+      allowed,
+      limit: max,
+      remaining,
+      resetAt: hit.resetAt,
+      used: weighted,
+    };
+  }
+
+  // fixed
+  const allowed = hit.current <= max;
+  const remaining = Math.max(0, max - hit.current);
+  return {
+    allowed,
+    limit: max,
+    remaining,
+    resetAt: hit.resetAt,
+    used: hit.current,
+  };
+}
+
+function applyHeaders(
+  res: Response,
+  decision: ResolvedDecision,
+  now: number,
+): void {
+  const resetSeconds = Math.max(0, Math.ceil((decision.resetAt - now) / 1000));
+  res.setHeader('RateLimit-Limit', String(decision.limit));
+  res.setHeader('RateLimit-Remaining', String(decision.remaining));
+  res.setHeader('RateLimit-Reset', String(resetSeconds));
+}
+
+function rejectRequest(
+  req: Request,
+  res: Response,
+  decision: ResolvedDecision,
+  key: string,
+  config: RateLimiterConfig,
+  emitHeaders: boolean,
+  now: number,
+): void {
+  const retryAfterSeconds = Math.max(
+    0,
+    Math.ceil((decision.resetAt - now) / 1000),
+  );
+  if (emitHeaders) {
+    applyHeaders(res, decision, now);
+    res.setHeader('Retry-After', String(retryAfterSeconds));
+  }
+  // A misbehaving onLimit hook must NEVER convert a 429 into an allow. Catch a
+  // synchronous throw, and attach a rejection handler to a returned promise so
+  // an async hook can't produce an unhandled rejection.
+  if (config.onLimit) {
+    const logger = config.logger ?? consoleLogger;
+    try {
+      const maybePromise = config.onLimit(req, key) as unknown;
+      if (
+        maybePromise &&
+        typeof (maybePromise as Promise<unknown>).then === 'function'
+      ) {
+        (maybePromise as Promise<unknown>).catch((err) =>
+          logger.warn('[express-security-kit] onLimit hook rejected', err),
+        );
+      }
+    } catch (err) {
+      logger.warn('[express-security-kit] onLimit hook threw', err);
+    }
+  }
+  res.status(429).json({
+    error: {
+      code: 'RATE_LIMITED',
+      message: 'Too many requests. Please retry later.',
+      retryAfter: retryAfterSeconds,
+    },
+  });
+}
+
+function buildSingleLimiter(config: RateLimiterConfig): RequestHandler {
+  const algorithm = config.algorithm ?? 'fixed';
+  const keyGenerator = config.keyGenerator ?? defaultKeyGenerator;
+  const store = config.store ?? getSharedStore();
+  const emitHeaders = config.headers ?? true;
+  const logger = config.logger ?? consoleLogger;
+  const clock = config.now ?? Date.now;
+  const overrideResolver =
+    config.overrideResolver ??
+    ((req: Request) => req.securityContext?.rateLimitOverride);
+
+  return async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      if (config.skip?.(req)) {
+        return next();
+      }
+
+      const now = clock();
+      const override = overrideResolver(req);
+      const { windowMs, max } = resolveMax(config, req, override);
+      const key = keyGenerator(req);
+
+      let hit;
+      try {
+        hit = await store.hit(key, windowMs, now);
+      } catch (err) {
+        // Fail OPEN: never let a store outage take down the service.
+        logger.warn(
+          '[express-security-kit] rate-limit store error; failing open',
+          err,
+        );
+        return next();
+      }
+
+      const decision = decide(algorithm, hit, windowMs, max, now);
+
+      if (!decision.allowed) {
+        return rejectRequest(
+          req,
+          res,
+          decision,
+          key,
+          config,
+          emitHeaders,
+          now,
+        );
+      }
+
+      if (emitHeaders) {
+        applyHeaders(res, decision, now);
+      }
+      return next();
+    } catch (err) {
+      // Any unexpected error also fails open.
+      (config.logger ?? consoleLogger).warn(
+        '[express-security-kit] rate-limit unexpected error; failing open',
+        err,
+      );
+      return next();
+    }
+  };
+}
+
+/**
+ * Create an Express rate-limit middleware.
+ *
+ * Pass a single config, or an ARRAY of tier configs applied in sequence — the
+ * first tier to exceed its limit rejects the request (this is what enables the
+ * recommended layered pattern: a coarse per-IP flood tier + a per-principal
+ * fair-share tier). Each tier is independent; give tiers distinct stores/keys.
+ */
+export function createRateLimiter(
+  config: RateLimiterConfig | RateLimiterConfig[],
+): RequestHandler {
+  if (Array.isArray(config)) {
+    const tiers = config.map(buildSingleLimiter);
+    return (req: Request, res: Response, next: NextFunction) => {
+      let index = 0;
+      const runNext = (err?: unknown): void => {
+        if (err) return next(err);
+        // A tier that rejected has already sent the 429 response.
+        if (res.headersSent) return;
+        const tier = tiers[index++];
+        if (!tier) return next();
+        tier(req, res, runNext as NextFunction);
+      };
+      runNext();
+    };
+  }
+  return buildSingleLimiter(config);
+}

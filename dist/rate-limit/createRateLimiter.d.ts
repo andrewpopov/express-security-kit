@@ -1,0 +1,51 @@
+import type { Request, RequestHandler } from 'express';
+import { RateLimitStore } from './store';
+import { KeyGenerator } from './keyGenerator';
+export type RateLimitAlgorithm = 'fixed' | 'sliding';
+/** Minimal logger surface; defaults to console. */
+export interface RateLimiterLogger {
+    warn: (message: string, meta?: unknown) => void;
+}
+export interface RateLimitOverride {
+    windowMs: number;
+    max: number;
+}
+export interface RateLimiterConfig {
+    /** Window length in ms. */
+    windowMs: number;
+    /** Max requests per window. A function receives the request for role-aware limits. */
+    max: number | ((req: Request) => number);
+    /** 'fixed' (default) or 'sliding' window counter. */
+    algorithm?: RateLimitAlgorithm;
+    /** Key generator. Default: verifiedIdentityKey (aka defaultKeyGenerator). */
+    keyGenerator?: KeyGenerator;
+    /** Backing store. Default: a shared in-process MemoryRateLimitStore. */
+    store?: RateLimitStore;
+    /**
+     * Resolve a per-request override. Default reads
+     * `req.securityContext?.rateLimitOverride`. Return undefined for no override.
+     */
+    overrideResolver?: (req: Request) => RateLimitOverride | undefined;
+    /** Skip limiting entirely for a request (e.g. health checks, dev mode). */
+    skip?: (req: Request) => boolean;
+    /**
+     * Called when a request is rejected with 429. May be async. A throw or a
+     * rejected promise is swallowed (logged) and NEVER prevents the 429.
+     */
+    onLimit?: (req: Request, key: string) => void | Promise<unknown>;
+    /** Emit RateLimit-* + Retry-After headers. Default true. */
+    headers?: boolean;
+    /** Logger for fail-open store errors. Default: console. */
+    logger?: RateLimiterLogger;
+    /** Injectable clock for deterministic tests. Default: Date.now. */
+    now?: () => number;
+}
+/**
+ * Create an Express rate-limit middleware.
+ *
+ * Pass a single config, or an ARRAY of tier configs applied in sequence — the
+ * first tier to exceed its limit rejects the request (this is what enables the
+ * recommended layered pattern: a coarse per-IP flood tier + a per-principal
+ * fair-share tier). Each tier is independent; give tiers distinct stores/keys.
+ */
+export declare function createRateLimiter(config: RateLimiterConfig | RateLimiterConfig[]): RequestHandler;

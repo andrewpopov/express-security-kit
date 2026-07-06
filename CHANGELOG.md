@@ -17,6 +17,44 @@ CHANGELOG entry.
 
 ---
 
+## 0.4.0
+
+Phase 4 (final pillar) — buffered audit. Completes the kit: helmet, rate
+limiting, API-key auth, request signing, and now audit.
+
+### Added
+
+- **`AuditBuffer`** — non-blocking, batched audit queue. `record(event)` never
+  throws and never blocks the request path; it auto-flushes at `maxBufferSize`
+  (default 100), on a `.unref()`'d timer (`flushIntervalMs`, default 5000), and
+  hard-caps the queue at `maxQueueSize` (default 10000) by dropping the OLDEST
+  events (counted via `onDropped`) so audit can never OOM. Flushes are
+  single-in-flight and coalesced (no double-send). On a sink error the failed
+  batch is re-queued at the FRONT for retry (`onFlushError`) — bounded by the
+  hard cap so a persistently failing sink can't grow unbounded, and the flush
+  loop stops re-spinning on failure. `close()` stops the timer and drains
+  remaining events with a bounded retry (`closeMaxRetries`, default 3, short
+  delay between attempts) so a transient sink failure at shutdown doesn't lose
+  events; `stop()`/`dispose()` clear the timer.
+  - Hardening: `record()`'s size-triggered flush is deferred to a microtask so a
+    synchronous sink never runs inside the request's call stack; every internal
+    log call is routed through a guarded `safeWarn` so a throwing logger can't
+    make `flush()`/`close()` reject or skip `onDropped`; the sink receives a COPY
+    of the batch (a mutating sink can't corrupt the re-queue); non-positive
+    `maxBufferSize`/`maxQueueSize` are rejected at construction; the hook
+    adapters are each independently never-throw; and `ConsoleAuditSink` guards
+    every event independently (a single un-serializable event emits a fallback
+    line instead of failing — and re-emitting — the whole batch).
+- **`AuditSink` interface** (injected persistence) + **`ConsoleAuditSink`** — a
+  JSON-lines dev sink; production injects a durable sink (Prisma / file / HTTP).
+- **`buildAuditEvent(req, input, options?)`** — pure, never-throws normalizer
+  that pulls principalType/principalId/keyId from `req.securityContext` and
+  ip/method/path from the request, with an injectable clock.
+- **Hook adapters** — `auditFailureHook` (api-key / signing `onFailure`),
+  `auditRateLimitHook` (rate limiter `onLimit`), and `auditDeniedHook`
+  (`requireScope.onDenied`) so one shared `AuditBuffer` wires into every pillar's
+  audit hook in one line.
+
 ## 0.3.0
 
 Phase 3 — OPT-IN HMAC request signing + replay protection (audit is Phase 4).

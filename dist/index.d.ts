@@ -18,3 +18,11 @@ export { createRequestSigningVerifier } from './signing/createRequestSigningVeri
 export type { RequestSigningVerifierConfig, SigningFailureReason, SigningLogger, SigningHeaderNames, SecretResolver, } from './signing/createRequestSigningVerifier';
 export { MemoryNonceStore } from './signing/nonceStore';
 export type { NonceStore, MemoryNonceStoreOptions, } from './signing/nonceStore';
+export { AuditBuffer } from './audit/AuditBuffer';
+export { buildAuditEvent } from './audit/buildAuditEvent';
+export { ConsoleAuditSink } from './audit/ConsoleAuditSink';
+export { auditFailureHook, auditRateLimitHook, auditDeniedHook, } from './audit/hooks';
+export type { AuditEvent, AuditSink, AuditBufferConfig, AuditLogger, } from './audit/types';
+export type { BuildAuditEventInput, BuildAuditEventOptions, } from './audit/buildAuditEvent';
+export type { AuditHookOptions } from './audit/hooks';
+export type { ConsoleAuditSinkLogger } from './audit/ConsoleAuditSink';

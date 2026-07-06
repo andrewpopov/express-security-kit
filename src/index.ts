@@ -80,6 +80,27 @@ export type {
   MemoryNonceStoreOptions,
 } from './signing/nonceStore';
 
+export { AuditBuffer } from './audit/AuditBuffer';
+export { buildAuditEvent } from './audit/buildAuditEvent';
+export { ConsoleAuditSink } from './audit/ConsoleAuditSink';
+export {
+  auditFailureHook,
+  auditRateLimitHook,
+  auditDeniedHook,
+} from './audit/hooks';
+export type {
+  AuditEvent,
+  AuditSink,
+  AuditBufferConfig,
+  AuditLogger,
+} from './audit/types';
+export type {
+  BuildAuditEventInput,
+  BuildAuditEventOptions,
+} from './audit/buildAuditEvent';
+export type { AuditHookOptions } from './audit/hooks';
+export type { ConsoleAuditSinkLogger } from './audit/ConsoleAuditSink';
+
 // Note: the Redis store is intentionally NOT exported here. Import it from the
 // '@andrewpopov/express-security-kit/redis-store' subpath so the core entry
 // never references ioredis.

@@ -29,17 +29,32 @@ npm install ioredis
 
 ## Middleware ordering
 
-Mount in this order. Later phases slot in where marked:
+The full stack, with audit wired into each pillar's hook via ONE shared
+`AuditBuffer`:
 
 ```
-helmet  →  rate-limit (Tier 1: per-IP flood)  →  api-key auth  →
-signing verifier  →  rate-limit (Tier 2: per-principal)  →  requireScope  →  routes
+helmet
+  → rate-limit (Tier 1: per-IP flood)      (+ onLimit    → auditRateLimitHook)
+  → api-key auth                            (+ onFailure  → auditFailureHook)
+  → signing verifier                        (+ onFailure  → auditFailureHook)
+  → rate-limit (Tier 2: per-principal)      (+ onLimit    → auditRateLimitHook)
+  → requireScope                            (+ onDenied   → auditDeniedHook)
+  → routes
 ```
 
 Security headers first, then a coarse flood guard *before* you spend CPU on auth,
 then the API-key verifier (which populates `req.securityContext`, including a
 per-key `hmacSecret`), then the signing verifier (which reads that secret), then
-identity-aware fair-share limiting and scope guards, then your routes.
+identity-aware fair-share limiting and scope guards, then your routes. Each
+pillar's audit hook records to the shared buffer; the buffer batches to your
+sink off the request path.
+
+> **Fail direction differs by layer.** The rate limiter **fails open** (a store
+> outage must not take the service down); the API-key verifier and the **signing
+> verifier fail closed** (any error — including an unavailable nonce store — →
+> generic 401, request denied). Audit is **fire-and-forget**: `record()` never
+> throws or blocks, and a broken sink can never break the request. All
+> intentional.
 
 > **Fail direction differs by layer.** The rate limiter **fails open** (a store
 > outage must not take the service down); the API-key verifier and the **signing
@@ -459,6 +474,103 @@ with another's.
 > (Prisma, Redis, …) implementing the `NonceStore` interface
 > (`consume(scope, nonce, ttlMs): Promise<'ok' | 'replay'>`) for those
 > deployments. A thrown/rejected `consume` makes the verifier **fail closed**.
+
+## Module 5 — Buffered audit
+
+`AuditBuffer` batches audit events off the request path to an injected
+`AuditSink`. The kit owns buffering/batching/flush/backpressure + event
+normalization; the SERVICE injects the sink (persistence) and decides what is
+auditable. `record()` is non-blocking and NEVER throws — a broken sink can never
+break a request.
+
+### (a) Inject a durable sink
+
+```ts
+import { AuditBuffer, type AuditSink } from '@andrewpopov/express-security-kit';
+
+const prismaSink: AuditSink = {
+  async write(events) {
+    await prisma.auditLog.createMany({ data: events }); // one batched insert
+  },
+};
+
+const audit = new AuditBuffer({
+  sink: prismaSink,
+  maxBufferSize: 100,     // flush when this many events are buffered (> 0)
+  flushIntervalMs: 5000,  // ...or every 5s, whichever first
+  maxQueueSize: 10000,    // hard cap; excess drops OLDEST (counted) (> 0)
+  closeMaxRetries: 3,     // bounded flush retries during close() on sink failure
+  onDropped: (n) => metrics.increment('audit.dropped', n),
+  onFlushError: (err) => log.error('audit sink failed; will retry', err),
+});
+```
+
+| Option | Default | Notes |
+|---|---|---|
+| `maxBufferSize` | 100 | Flush once this many events are buffered. Must be > 0. |
+| `flushIntervalMs` | 5000 | Periodic flush interval (`.unref()`'d timer). ≤ 0 disables the timer. |
+| `maxQueueSize` | 10000 | Hard cap; excess drops OLDEST (counted via `onDropped`). Must be > 0. |
+| `closeMaxRetries` | 3 | Extra flush attempts during `close()` when the sink is failing, with a short delay between. Beyond this, undrained events stay queued (surfaced via `onFlushError`) rather than hanging shutdown. |
+
+> **At-least-once delivery.** On a transient sink error the WHOLE failed batch is
+> re-queued and retried, so a custom sink may see the same event more than once.
+> Make `sink.write` **atomic or idempotent** (e.g. upsert on a unique event id).
+> `ConsoleAuditSink` guards each event independently so one un-serializable event
+> can't fail — and thus re-emit — the rest of a batch.
+
+`ConsoleAuditSink` (JSON lines) is a dev default — **production should inject a
+durable sink** (Prisma / append-only file / log-shipping HTTP).
+
+### (b) Wire audit into every pillar with one shared buffer
+
+```ts
+import {
+  auditFailureHook, auditRateLimitHook, auditDeniedHook,
+} from '@andrewpopov/express-security-kit';
+
+app.use(createRateLimiter({
+  windowMs: 60_000, max: 600, keyGenerator: ipKey,
+  onLimit: auditRateLimitHook(audit, 'ratelimit.ip'),
+}));
+
+app.use(createApiKeyAuth({
+  prefix: 'ssk_ak_',
+  lookup,
+  onFailure: auditFailureHook(audit, 'apiKey.auth'),        // (req, reason) => void
+}));
+
+app.use('/api/signed', createRequestSigningVerifier({
+  secret: (_req, ctx) => ctx?.hmacSecret ?? undefined,
+  nonceStore,
+  onFailure: auditFailureHook(audit, 'signing.verify'),     // records the reason
+}));
+
+app.post('/api/admin/x',
+  requireScope(canAdmin, { onDenied: auditDeniedHook(audit, 'scope.admin') }),
+  adminHandler,
+);
+```
+
+Each hook records a normalized `AuditEvent` (principal/ip/method/path pulled from
+`req.securityContext` + the request). You can also record success events by hand
+with `buildAuditEvent(req, { action, outcome: 'allow' })`.
+
+### (c) Flush on shutdown
+
+```ts
+process.on('SIGTERM', async () => {
+  server.close();
+  await audit.close(); // stops the timer and drains remaining events
+  process.exit(0);
+});
+```
+
+> **Backpressure & durability.** The queue is hard-capped — a sustained sink
+> outage drops the OLDEST events (counted via `onDropped`) rather than growing
+> unbounded. On a transient sink error the failed batch is re-queued at the
+> front and retried on the next flush. Events buffered in memory are lost on a
+> hard crash; a durable sink minimizes the window, and `close()` drains on
+> graceful shutdown.
 
 ## Stores
 

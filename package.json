@@ -1,6 +1,6 @@
 {
   "name": "@andrewpopov/express-security-kit",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Dependency-light Express security library. Owns the machinery (helmet preset, rate limiter); consuming services inject all policy.",
   "author": "Andrew Popov",
   "license": "MIT",

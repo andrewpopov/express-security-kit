@@ -2,7 +2,7 @@
 // Shorthand re-exports (no renaming) so cjs-module-lexer statically detects the
 // named exports for ESM consumers of the CommonJS build.
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.MemoryNonceStore = exports.createRequestSigningVerifier = exports.sha256Hex = exports.signRequest = exports.buildCanonicalString = exports.requireScope = exports.timingSafeEqualHex = exports.scopedHmacHasher = exports.sha256Hasher = exports.createApiKeyAuth = exports.decodedJwtKey = exports.verifiedIdentityKey = exports.ipKey = exports.defaultKeyGenerator = exports.MemoryRateLimitStore = exports.createRateLimiter = exports.createHelmetMiddleware = void 0;
+exports.auditDeniedHook = exports.auditRateLimitHook = exports.auditFailureHook = exports.ConsoleAuditSink = exports.buildAuditEvent = exports.AuditBuffer = exports.MemoryNonceStore = exports.createRequestSigningVerifier = exports.sha256Hex = exports.signRequest = exports.buildCanonicalString = exports.requireScope = exports.timingSafeEqualHex = exports.scopedHmacHasher = exports.sha256Hasher = exports.createApiKeyAuth = exports.decodedJwtKey = exports.verifiedIdentityKey = exports.ipKey = exports.defaultKeyGenerator = exports.MemoryRateLimitStore = exports.createRateLimiter = exports.createHelmetMiddleware = void 0;
 var createHelmetMiddleware_1 = require("./helmet/createHelmetMiddleware");
 Object.defineProperty(exports, "createHelmetMiddleware", { enumerable: true, get: function () { return createHelmetMiddleware_1.createHelmetMiddleware; } });
 var createRateLimiter_1 = require("./rate-limit/createRateLimiter");
@@ -30,6 +30,16 @@ var createRequestSigningVerifier_1 = require("./signing/createRequestSigningVeri
 Object.defineProperty(exports, "createRequestSigningVerifier", { enumerable: true, get: function () { return createRequestSigningVerifier_1.createRequestSigningVerifier; } });
 var nonceStore_1 = require("./signing/nonceStore");
 Object.defineProperty(exports, "MemoryNonceStore", { enumerable: true, get: function () { return nonceStore_1.MemoryNonceStore; } });
+var AuditBuffer_1 = require("./audit/AuditBuffer");
+Object.defineProperty(exports, "AuditBuffer", { enumerable: true, get: function () { return AuditBuffer_1.AuditBuffer; } });
+var buildAuditEvent_1 = require("./audit/buildAuditEvent");
+Object.defineProperty(exports, "buildAuditEvent", { enumerable: true, get: function () { return buildAuditEvent_1.buildAuditEvent; } });
+var ConsoleAuditSink_1 = require("./audit/ConsoleAuditSink");
+Object.defineProperty(exports, "ConsoleAuditSink", { enumerable: true, get: function () { return ConsoleAuditSink_1.ConsoleAuditSink; } });
+var hooks_1 = require("./audit/hooks");
+Object.defineProperty(exports, "auditFailureHook", { enumerable: true, get: function () { return hooks_1.auditFailureHook; } });
+Object.defineProperty(exports, "auditRateLimitHook", { enumerable: true, get: function () { return hooks_1.auditRateLimitHook; } });
+Object.defineProperty(exports, "auditDeniedHook", { enumerable: true, get: function () { return hooks_1.auditDeniedHook; } });
 // Note: the Redis store is intentionally NOT exported here. Import it from the
 // '@andrewpopov/express-security-kit/redis-store' subpath so the core entry
 // never references ioredis.

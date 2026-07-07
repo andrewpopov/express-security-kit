@@ -17,6 +17,37 @@ CHANGELOG entry.
 
 ---
 
+## 0.8.0
+
+### Added (rate-limit — skipSuccessful / refund)
+
+- **`RateLimiterConfig.skipSuccessful?: boolean`** (default false, opt-in,
+  non-breaking) — when true, a request that ends with a status `< 400` is
+  REFUNDED (its counted hit is decremented) so only failed requests count toward
+  the limit, mirroring express-rate-limit's `skipSuccessfulRequests` (e.g. an
+  auth limiter where only failed logins should count). Default behavior is
+  unchanged when the flag is unset.
+- **`RateLimitStore.decrement(key, windowMs?, now?)`** added to the store
+  interface. `MemoryRateLimitStore` and `RedisRateLimitStore` both implement it,
+  flooring at 0 and targeting the EXACT bucket the matching `hit` incremented
+  (the `windowMs`/`now` passed are the same values used for that `hit`). The
+  Redis path uses a conditional-DECR Lua script (never a phantom key, never
+  negative); an eval-less test double falls back to non-atomic GET-then-DECR.
+
+### Fixed (skipSuccessful refund semantics — Codex review)
+
+- The refund fires ONLY on response `finish`. A `close` without `finish` is an
+  aborted request (status not final — often still the default 200) and is NOT
+  refunded; `close` only cleans up listeners.
+- `MemoryRateLimitStore.decrement` targets the hit-time window: if the bucket
+  rolled between `hit` and refund, the original hit's count moved into
+  `previous`, so it decrements `previous` (or no-ops if the window fully
+  expired) rather than an unrelated current-window request.
+- The refund guard is per-LIMITER (a unique symbol per built limiter), so
+  tiered limiters each refund their own counted hit.
+- The two fail-open paths and the refund catch route through `safeWarn`, so a
+  throwing custom `logger` can't turn a store blip into a 500.
+
 ## 0.7.0
 
 ### Changed (rate-limit store — correctness hardening)
@@ -49,28 +80,6 @@ CHANGELOG entry.
   the client has no `eval`, `hit()` falls back to the original 3-call path —
   this fallback is explicitly NON-ATOMIC and does NOT fix the leak; it exists
   only for eval-less test doubles, since real ioredis always has `eval`.
-
-### Added (rate-limit — skipSuccessful / refund)
-
-- **`RateLimiterConfig.skipSuccessful?: boolean`** (default false, opt-in,
-  non-breaking) — when true, a request that ends with a status `< 400` is
-  REFUNDED (its counted hit is decremented) so only failed requests count
-  toward the limit, mirroring express-rate-limit's `skipSuccessfulRequests`
-  (e.g. an auth limiter where only failed logins should count). The refund
-  fires once on response `finish`/`close` (both hooked so the listeners can't
-  leak if the socket dies), is guarded by a per-response symbol so it runs AT
-  MOST once, only refunds a `< 400` response, and is never applied to a rejected
-  (429) request. It never throws; a refund error is logged via the configured
-  logger. Default behavior (option unset) is unchanged.
-- **`RateLimitStore.decrement(key, windowMs?, now?)`** — new store method used
-  by the refund. `MemoryRateLimitStore` decrements the current-window counter
-  (floored at 0; no-op if the key/window is gone). `RedisRateLimitStore` does a
-  conditional-DECR of the exact window bucket via a Lua script (or a non-atomic
-  GET-then-DECR fallback for eval-less clients) that never creates a phantom key
-  or drives a counter negative. `windowMs`/`now` are optional so `decrement(key)`
-  remains valid, but `createRateLimiter` passes the same `windowMs`/`now` it used
-  for the corresponding `hit` so windowed stores target the exact bucket.
-  `RedisLikeClient` gains a `decr` method.
 
 ### Added (signing hardening)
 

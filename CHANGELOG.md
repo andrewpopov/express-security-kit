@@ -17,6 +17,108 @@ CHANGELOG entry.
 
 ---
 
+## 0.7.0
+
+### Changed (rate-limit store — correctness hardening)
+
+- **`RateLimitStore.reset(key, windowMs?)`** — `reset` now accepts an optional
+  `windowMs`. `MemoryRateLimitStore.reset(key, windowMs)` deletes only that
+  exact window bucket; `RedisRateLimitStore.reset(key, windowMs)` deletes the
+  EXACT current+previous buckets for that window (no guessing). Omitting
+  `windowMs` keeps prior behavior (`MemoryRateLimitStore` clears every window
+  for the key; `RedisRateLimitStore` falls back to a fixed set of common
+  window-size guesses — see `RESET_WINDOW_GUESSES` in the README).
+- **`RedisRateLimitStore` bucket keys now include `windowMs`**:
+  `<keyPrefix>:<key>:<windowMs>:<windowIndex>` (previously
+  `<keyPrefix>:<key>:<windowIndex>`), matching `MemoryRateLimitStore`'s
+  per-window-length namespacing so two limiters sharing a store/key with
+  different window lengths never collide. **Breaking for live Redis DATA
+  only** — old-format buckets are simply orphaned and TTL-expire on their
+  own; no action needed.
+- **Atomic INCR+PEXPIRE via an optional `eval`** — fixes a never-expiring-key
+  leak. Previously `hit()` ran INCR then a SEPARATE PEXPIRE then GET; a crash
+  between the two left a key with NO TTL, leaking forever. `RedisLikeClient`
+  gains an OPTIONAL `eval?(script, numKeys, ...args)`. When present (real
+  ioredis always implements it), `hit()` runs ONE atomic Lua script: INCR,
+  then re-arm the TTL whenever `PTTL < 0` (covers a fresh key AND a
+  previously-leaked key — self-healing), then GET the previous bucket — one
+  round trip, atomic, so INCR+PEXPIRE can never be torn. The eval result is
+  STRICTLY parsed (array shape, finite non-negative integers); a malformed
+  result THROWS rather than silently coercing, which `createRateLimiter`
+  catches and fails OPEN on (the desired behavior for a store anomaly). When
+  the client has no `eval`, `hit()` falls back to the original 3-call path —
+  this fallback is explicitly NON-ATOMIC and does NOT fix the leak; it exists
+  only for eval-less test doubles, since real ioredis always has `eval`.
+
+### Added (signing hardening)
+
+- **CR/LF-injection guard in `buildCanonicalString`** — `method`, `url`, and
+  `nonce` are now rejected (`Invalid canonical field: <field> must not
+  contain CR/LF`) if they contain a raw `\n` or `\r`. Without this, a
+  CR/LF-carrying `url`/`nonce` could let two distinct request tuples
+  canonicalize to the same LF-joined string (delimiter ambiguity), risking
+  signature reuse across requests. Valid HTTP requests never carry a raw
+  CR/LF in these fields, so this only rejects malformed/hostile input — the
+  wire format for valid inputs is byte-identical (stoki compat preserved).
+- **`requireRawBody` option on `createRequestSigningVerifier`** — when `true`,
+  a body-bearing request (never GET/HEAD) that arrives without `req.rawBody`
+  FAILS CLOSED (`no_raw_body`) instead of silently hashing
+  `JSON.stringify(req.body)` (which can diverge from the client's exact
+  signed bytes). Default `false` (unchanged behavior). Only governs the
+  DEFAULT body extractor — a custom `bodySource` participates as provided.
+
+### Added (audit)
+
+- **`AuditEvent.id`** (optional) — `buildAuditEvent` now sets `id` by default
+  via `crypto.randomUUID()` (configurable via a new `id?: () => string`
+  option on `BuildAuditEventOptions` / `AuditHookOptions`, threaded through
+  `auditFailureHook` / `auditRateLimitHook` / `auditDeniedHook`). Intended for
+  DEDUPE by a durable sink, since `AuditBuffer` delivery is at-least-once —
+  make `sink.write` idempotent (e.g. upsert on `id`) if you rely on exactly-
+  once storage. Additive; existing exact-`toEqual` assertions on a built
+  event should inject a deterministic `id` (or switch to
+  `expect.objectContaining`).
+
+### Added (testing)
+
+- Property/fuzz tests (new DEV dependency: `fast-check`) covering
+  `buildCanonicalString` (no delimiter ambiguity for CR/LF-free fields; any
+  CR/LF in `method`/`url`/`nonce` throws), `timingSafeEqualHex` (never
+  throws; true iff byte-identical; false on length mismatch), and
+  `decodedJwtKey` (never throws on arbitrary header garbage).
+- Concurrency tests for `MemoryRateLimitStore` (N parallel hits, no lost
+  updates; drop-oldest eviction stays bounded under a key flood),
+  `MemoryNonceStore` (N concurrent consumes of the same nonce yield exactly
+  one `'ok'`), and `AuditBuffer` (sustained `record()` against a slow sink
+  respects `maxQueueSize` and never runs two flushes concurrently).
+- A real-Redis integration test suite for `RedisRateLimitStore`
+  (`redis-store.integration.test.ts`), skipped locally/in the normal `test`
+  job unless `ESK_REDIS_URL` is set; a new non-required `redis-integration`
+  CI job runs it against a `services: redis` container.
+
+### Docs
+
+- README: removed the stale "Phase 1" intro (API-key/HMAC/audit are
+  documented, not future work), fixed the install pin (`#v0.1.0` →
+  `#v0.7.0`), removed a duplicated "Fail direction differs by layer"
+  blockquote, added a `verifyApiKey` mention to the module list, and
+  updated the Redis store section for the `windowMs`-scoped bucket keys and
+  atomic-`eval` hit path.
+- Added `SECURITY.md` (per-pillar threat model, fail-open/fail-closed
+  matrix, replay-window semantics, vulnerability reporting) and
+  `docs/MIGRATING.md` (hand-rolled → kit mapping, `rawBody`/`trust proxy`
+  gotchas).
+
+### CI
+
+- `test` job gains a dist-freshness check (`npm run build && git diff
+  --exit-code dist`) so a stale committed `dist/` fails CI.
+- New non-required `compat` job (Node 22) + `ci-success` aggregate gate
+  (mirrors the deploy-kit CI pattern) so `test` stays a stable required
+  status-check name.
+- New non-required `redis-integration` job (Redis service container) runs
+  the real-Redis integration suite.
+
 ## 0.6.0
 
 ### Added

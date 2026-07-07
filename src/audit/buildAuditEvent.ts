@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { Request } from 'express';
 import type { AuditEvent } from './types';
 
@@ -12,6 +13,13 @@ export interface BuildAuditEventInput {
 export interface BuildAuditEventOptions {
   /** Injectable clock (ms). Default Date.now. Converted to an ISO string. */
   now?: () => number;
+  /**
+   * Generator for the event's optional `id` field. Default
+   * `crypto.randomUUID`. Inject a deterministic generator (e.g. `() =>
+   * 'fixed-id'`) for tests that assert exact event shapes. See
+   * {@link AuditEvent.id} for the dedupe contract this enables.
+   */
+  id?: () => string;
 }
 
 /**
@@ -39,6 +47,12 @@ export function buildAuditEvent(
     action: input.action,
     outcome: input.outcome,
   };
+
+  try {
+    event.id = (options.id ?? randomUUID)();
+  } catch {
+    // Id generation must never break event construction — omit it on throw.
+  }
 
   try {
     const ctx = req?.securityContext;

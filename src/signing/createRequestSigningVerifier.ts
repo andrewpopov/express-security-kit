@@ -14,6 +14,7 @@ export type SigningFailureReason =
   | 'signature'
   | 'replay'
   | 'store_error'
+  | 'no_raw_body'
   | 'error';
 
 /** Minimal logger surface; defaults to console. */
@@ -54,6 +55,15 @@ export interface RequestSigningVerifierConfig {
   nonceScope?: (req: Request, ctx: SecurityContext | undefined) => string;
   /** Body-string extractor. Default: rawBody-first (see module docs). */
   bodySource?: (req: Request) => string;
+  /**
+   * When true, FAIL CLOSED (reason `'no_raw_body'`) for body-bearing methods
+   * (never GET/HEAD, which have no body) if `req.rawBody` is absent — instead
+   * of silently falling back to `JSON.stringify(req.body)`, which can produce
+   * bytes that differ from what the client actually signed (see the module
+   * docs' rawBody warning). Only governs the DEFAULT body extractor; a custom
+   * `bodySource` participates as provided and is not affected. Default false.
+   */
+  requireRawBody?: boolean;
   /** Audit hook; receives the specific reason. May be async. MUST NOT respond. */
   onFailure?: (
     req: Request,
@@ -145,7 +155,9 @@ export function createRequestSigningVerifier(
     signature: config.headerNames?.signature ?? 'x-signature',
   };
   const nonceScope = config.nonceScope ?? defaultNonceScope;
+  const usingDefaultBodySource = config.bodySource === undefined;
   const bodySource = config.bodySource ?? defaultBodySource;
+  const requireRawBody = config.requireRawBody ?? false;
   const clock = config.now ?? Date.now;
   const logger = config.logger ?? consoleLogger;
 
@@ -210,6 +222,21 @@ export function createRequestSigningVerifier(
         return fail(req, res, 'signature');
       }
       const presented = signatureRaw.toLowerCase();
+
+      // 4b. requireRawBody: only for body-bearing methods (never GET/HEAD),
+      // and only when using the DEFAULT body extractor — a custom bodySource
+      // participates as provided.
+      if (requireRawBody && usingDefaultBodySource) {
+        const method = (req.method ?? '').toUpperCase();
+        const bodyless = method === 'GET' || method === 'HEAD';
+        if (!bodyless) {
+          const rawBody = req.rawBody;
+          const hasRawBody = typeof rawBody === 'string' || Buffer.isBuffer(rawBody);
+          if (!hasRawBody) {
+            return fail(req, res, 'no_raw_body');
+          }
+        }
+      }
 
       // 5. Recompute the expected signature and timing-safe compare.
       const canonical = buildCanonicalString({

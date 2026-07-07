@@ -76,6 +76,16 @@ describe('audit hook adapters', () => {
     stop();
   });
 
+  it('threads a deterministic id option through to the recorded event', async () => {
+    const { buffer, events, stop } = bufferCapturing();
+    auditFailureHook(buffer, 'apiKey.auth', 'deny', { id: () => 'hook-fixed-id' })(req(), 'not_found');
+    auditRateLimitHook(buffer, 'ratelimit', { id: () => 'hook-fixed-id' })(req(), 'user:p1');
+    auditDeniedHook(buffer, 'scope', { id: () => 'hook-fixed-id' })(req());
+    await buffer.flush();
+    expect(events.map((e) => e.id)).toEqual(['hook-fixed-id', 'hook-fixed-id', 'hook-fixed-id']);
+    stop();
+  });
+
   it('auditFailureHook never throws on a hostile reason (throwing toString)', async () => {
     const { buffer, events, stop } = bufferCapturing();
     const hostileReason = {

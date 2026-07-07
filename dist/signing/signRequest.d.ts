@@ -19,6 +19,9 @@ export declare function sha256Hex(input: string): string;
  *
  * For GET/HEAD the body is treated as '' → sha256hex(''). This reproduces
  * stoki's scheme byte-for-byte.
+ *
+ * Throws if `method`, `url`, or `nonce` contains a raw CR or LF (see {@link
+ * assertNoCrlf}).
  */
 export declare function buildCanonicalString(input: CanonicalStringInput): string;
 export interface SignRequestInput extends CanonicalStringInput {

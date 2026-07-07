@@ -68,8 +68,9 @@ export interface RateLimiterConfig {
    * a status < 400, so only failed requests count toward the limit — mirrors
    * express-rate-limit's `skipSuccessfulRequests` (e.g. an auth limiter where
    * only failed logins should count). The refund fires once on response
-   * `finish`/`close`. Default false. Requires a store that implements
-   * `decrement` (the built-in Memory and Redis stores do).
+   * `finish` (a genuinely completed response); a `close` without `finish` is an
+   * aborted request and is NOT refunded. Default false. Requires a store that
+   * implements `decrement` (the built-in Memory and Redis stores do).
    */
   skipSuccessful?: boolean;
   /** Emit RateLimit-* + Retry-After headers. Default true. */

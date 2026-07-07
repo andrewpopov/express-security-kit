@@ -307,10 +307,12 @@ const authLimiter = createRateLimiter({
 app.post('/api/auth/login', authLimiter, loginHandler);
 ```
 
-The refund fires once when the response finishes (also on `close` if the socket
-dies early), only for a `< 400` status, at most once per request, and never for
-a rejected (429) request. It uses the store's `decrement` (both built-in stores
-implement it) and never throws.
+The refund fires once when the response `finish`es with a `< 400` status. A
+`close` without `finish` is an aborted request (its status isn't final — often
+still the default 200) and is NOT refunded. The guard is per-limiter, so tiered
+limiters each refund their own hit; a rejected (429) request is never refunded.
+It uses the store's `decrement` (both built-in stores implement it) and never
+throws.
 
 ## Module 3 — API-key auth
 

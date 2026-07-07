@@ -77,7 +77,9 @@ function createRequestSigningVerifier(config) {
         signature: config.headerNames?.signature ?? 'x-signature',
     };
     const nonceScope = config.nonceScope ?? defaultNonceScope;
+    const usingDefaultBodySource = config.bodySource === undefined;
     const bodySource = config.bodySource ?? defaultBodySource;
+    const requireRawBody = config.requireRawBody ?? false;
     const clock = config.now ?? Date.now;
     const logger = config.logger ?? consoleLogger;
     const fail = (req, res, reason) => {
@@ -128,6 +130,20 @@ function createRequestSigningVerifier(config) {
                 return fail(req, res, 'signature');
             }
             const presented = signatureRaw.toLowerCase();
+            // 4b. requireRawBody: only for body-bearing methods (never GET/HEAD),
+            // and only when using the DEFAULT body extractor — a custom bodySource
+            // participates as provided.
+            if (requireRawBody && usingDefaultBodySource) {
+                const method = (req.method ?? '').toUpperCase();
+                const bodyless = method === 'GET' || method === 'HEAD';
+                if (!bodyless) {
+                    const rawBody = req.rawBody;
+                    const hasRawBody = typeof rawBody === 'string' || Buffer.isBuffer(rawBody);
+                    if (!hasRawBody) {
+                        return fail(req, res, 'no_raw_body');
+                    }
+                }
+            }
             // 5. Recompute the expected signature and timing-safe compare.
             const canonical = (0, signRequest_1.buildCanonicalString)({
                 method: req.method,

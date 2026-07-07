@@ -301,6 +301,57 @@ describe('createRequestSigningVerifier — non-ok store result fails closed', ()
   });
 });
 
+describe('createRequestSigningVerifier — requireRawBody', () => {
+  it('fails closed (no_raw_body) for a body-bearing method with no req.rawBody', async () => {
+    const onFailure = vi.fn();
+    const req = makeReq({}); // POST, has rawBody set by makeReq by default
+    delete (req as { rawBody?: unknown }).rawBody;
+    const out = await invoke(
+      createRequestSigningVerifier(baseConfig({ requireRawBody: true, onFailure })),
+      req,
+    );
+    expect(out.nextCalled).toBe(false);
+    expect(out.status).toBe(401);
+    expect(onFailure).toHaveBeenCalledWith(expect.anything(), 'no_raw_body');
+  });
+
+  it('does NOT require rawBody for GET/HEAD (no regression)', async () => {
+    const out = await invoke(
+      createRequestSigningVerifier(baseConfig({ requireRawBody: true })),
+      makeReq({ method: 'GET', url: '/api/lists/abc123', nonce: 'nonce-getreq000001' }),
+    );
+    expect(out.nextCalled).toBe(true);
+  });
+
+  it('does not affect a custom bodySource (participates as provided)', async () => {
+    const body = JSON.stringify({ name: 'Milk', qty: 2 });
+    const req = makeReq({ body });
+    delete (req as { rawBody?: unknown }).rawBody;
+    const out = await invoke(
+      createRequestSigningVerifier(
+        baseConfig({ requireRawBody: true, bodySource: () => body }),
+      ),
+      req,
+    );
+    expect(out.nextCalled).toBe(true);
+  });
+
+  it('default false: missing rawBody does NOT fail closed with no_raw_body (unchanged prior behavior)', async () => {
+    const onFailure = vi.fn();
+    const req = makeReq({}); // requireRawBody defaults to false
+    delete (req as { rawBody?: unknown }).rawBody;
+    const out = await invoke(
+      createRequestSigningVerifier(baseConfig({ onFailure })),
+      req,
+    );
+    // Without rawBody the default extractor falls back to JSON.stringify(req.body)
+    // (absent on this fixture) -> '' -> a signature MISMATCH, not the new guard.
+    expect(out.nextCalled).toBe(false);
+    expect(out.status).toBe(401);
+    expect(onFailure).toHaveBeenCalledWith(expect.anything(), 'signature');
+  });
+});
+
 describe('createRequestSigningVerifier — static vs resolver secret', () => {
   it('static string secret works', async () => {
     const out = await invoke(

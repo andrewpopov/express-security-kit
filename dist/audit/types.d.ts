@@ -3,6 +3,15 @@
  * hand) and persisted in batches by an {@link AuditSink}.
  */
 export interface AuditEvent {
+    /**
+     * Optional per-event identifier (default: `crypto.randomUUID()` — see
+     * {@link buildAuditEvent}'s `id` option). Intended for DEDUPE by a durable
+     * sink: {@link AuditBuffer}'s at-least-once delivery contract means a
+     * transient sink failure can re-deliver the same event, so a sink backed by
+     * a database should upsert on this id (unique constraint) rather than
+     * blindly insert.
+     */
+    id?: string;
     /** ISO-8601 timestamp of when the event occurred. */
     timestamp: string;
     /** Service-defined action name, e.g. 'apiKey.auth', 'list.delete'. */

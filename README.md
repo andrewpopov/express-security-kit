@@ -1,11 +1,10 @@
 # @andrewpopov/express-security-kit
 
 A dependency-light Express security library. It owns the **machinery**;
-consuming services inject all **policy**. Phase 1 ships two modules — a hardened
-**helmet preset** and a **rate limiter** — plus a shared `SecurityContext` type.
-
-> API-key auth, HMAC request signing, and audit logging are LATER phases and are
-> intentionally NOT in this package yet.
+consuming services inject all **policy**. It ships five modules: a hardened
+**helmet preset**, a **rate limiter**, **API-key auth** (`createApiKeyAuth` /
+`verifyApiKey`), **HMAC request signing + replay protection**, and **buffered
+audit logging** — plus a shared `SecurityContext` type.
 
 The core has **zero runtime dependencies**. `express` and `helmet` are peer
 dependencies you already have; `ioredis` is an *optional* peer needed only if
@@ -16,7 +15,7 @@ you use the Redis store subpath.
 This package is distributed via GitHub tags (not npm):
 
 ```bash
-npm install github:andrewpopov/express-security-kit#v0.1.0
+npm install github:andrewpopov/express-security-kit#v0.7.0
 ```
 
 Peers (you almost certainly already have these):
@@ -54,12 +53,7 @@ sink off the request path.
 > verifier fail closed** (any error — including an unavailable nonce store — →
 > generic 401, request denied). Audit is **fire-and-forget**: `record()` never
 > throws or blocks, and a broken sink can never break the request. All
-> intentional.
-
-> **Fail direction differs by layer.** The rate limiter **fails open** (a store
-> outage must not take the service down); the API-key verifier and the **signing
-> verifier fail closed** (any error — including an unavailable nonce store — →
-> generic 401, request denied). That's intentional.
+> intentional — see `SECURITY.md` for the full fail-open/fail-closed matrix.
 
 ## Module 1 — Helmet preset
 
@@ -521,6 +515,12 @@ app.use(express.json({
 
 GET/HEAD requests have no body (hashed as `''`), so they don't need this.
 
+Set `requireRawBody: true` to FAIL CLOSED (reason `no_raw_body`) on a
+body-bearing request (never GET/HEAD) that arrives without `req.rawBody`,
+instead of silently falling back to `JSON.stringify(req.body)`. Default
+`false` (unchanged behavior). Only governs the default extractor — a custom
+`bodySource` participates as provided.
+
 ### Replay protection & the nonce store
 
 After the signature is proven valid (and before `next()`), the nonce is consumed
@@ -640,15 +640,23 @@ process.on('SIGTERM', async () => {
   Call `.stop()` / `.dispose()` in tests to clear the timer.
 - **`RedisRateLimitStore`** — for multi-instance deployments. Imported ONLY from
   the `@andrewpopov/express-security-kit/redis-store` subpath; the main entry
-  never references ioredis, so the core stays dependency-free.
+  never references ioredis, so the core stays dependency-free. Bucket keys are
+  `<keyPrefix>:<key>:<windowMs>:<windowIndex>` (namespaced by window length,
+  same as `MemoryRateLimitStore`). When the client implements `eval` (real
+  ioredis always does), `hit()` runs ONE atomic Lua round trip — INCR, then
+  (re)arm the TTL only if none is set (`PTTL < 0`), then GET the previous
+  bucket — so a crash between INCR and PEXPIRE can no longer leave a
+  never-expiring key, and the script self-heals any key already leaked by an
+  older version. Pass `reset(key, windowMs)` for an EXACT reset of that
+  window's buckets.
 
-  > ⚠️ **`reset()` limitation.** The store interface gives `reset(key)` no window
-  > length, so `RedisRateLimitStore.reset()` only clears buckets for a fixed set
-  > of common window sizes (1s, 1m, 15m, 1h, 1d). If your limiter uses a
-  > **custom** `windowMs` not in that list, its buckets are **not** cleared and
-  > the key stays limited until the window naturally expires — delete the bucket
-  > keys yourself (`<keyPrefix>:<key>:<floor(now/windowMs)>` and the prior index)
-  > if you need an exact reset. `MemoryRateLimitStore.reset()` has no such limit.
+  > ⚠️ **`reset(key)` without `windowMs`.** Omitting `windowMs` falls back to a
+  > fixed set of common window sizes (1s, 1m, 15m, 1h, 1d) rather than a
+  > heavier SCAN. If your limiter uses a **custom** `windowMs` not in that
+  > list, pass it explicitly (`reset(key, windowMs)`) for a precise reset —
+  > otherwise those buckets are **not** cleared and the key stays limited
+  > until the window naturally expires. `MemoryRateLimitStore.reset()` has no
+  > such limit either way.
 
 ```ts
 import { RedisRateLimitStore } from '@andrewpopov/express-security-kit/redis-store';

@@ -21,8 +21,12 @@ export interface RateLimitStore {
      * and the current window's reset time.
      */
     hit(key: string, windowMs: number, now: number): Promise<HitResult>;
-    /** Clear all state for a key. */
-    reset(key: string): Promise<void>;
+    /**
+     * Clear state for a key. When `windowMs` is given, clears ONLY that window's
+     * bucket(s) — precise, no guessing. When omitted, clears every window bucket
+     * tracked for the key (implementation-defined scope; see each store's docs).
+     */
+    reset(key: string, windowMs?: number): Promise<void>;
     /** Release resources (timers, connections). Safe to call more than once. */
     dispose?(): void;
 }
@@ -57,7 +61,7 @@ export declare class MemoryRateLimitStore implements RateLimitStore {
      * stale, so `previous` resets to zero. A same-or-earlier window is a no-op.
      */
     private rollWindow;
-    reset(key: string): Promise<void>;
+    reset(key: string, windowMs?: number): Promise<void>;
     private evictIfNeeded;
     private cleanup;
     /** Clear the cleanup timer. Alias of dispose() for ergonomic test teardown. */

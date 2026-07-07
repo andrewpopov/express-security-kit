@@ -3,6 +3,7 @@ import type { Request } from 'express';
 import { createRateLimiter, RateLimiterConfig } from '../createRateLimiter';
 import { MemoryRateLimitStore, RateLimitStore } from '../store';
 import { ipKey } from '../keyGenerator';
+import { RedisRateLimitStore, RedisLikeClient } from '../redis-store';
 
 const stores: MemoryRateLimitStore[] = [];
 function makeStore(...args: ConstructorParameters<typeof MemoryRateLimitStore>) {
@@ -466,6 +467,27 @@ describe('fail-open', () => {
       windowMs: 1000,
       max: 1,
       store: throwingStore,
+      logger: { warn },
+      now: () => 10_000,
+    });
+    const res = await invoke(mw, makeReq());
+    expect(res.nextCalled).toBe(true);
+    expect(warn).toHaveBeenCalled();
+  });
+
+  it('allows the request when RedisRateLimitStore.hit rejects (eval throws)', async () => {
+    const rejectingEvalClient: RedisLikeClient = {
+      incr: async () => 1,
+      pexpire: async () => 1,
+      get: async () => null,
+      del: async () => 0,
+      eval: () => Promise.reject(new Error('eval failed')),
+    };
+    const warn = vi.fn();
+    const mw = createRateLimiter({
+      windowMs: 1000,
+      max: 1,
+      store: new RedisRateLimitStore(rejectingEvalClient),
       logger: { warn },
       now: () => 10_000,
     });

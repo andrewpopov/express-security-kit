@@ -98,4 +98,37 @@ describe('MemoryRateLimitStore', () => {
     store.stop();
     expect(store.size).toBe(0);
   });
+
+  it('reset(key, windowMs) clears only that window bucket', async () => {
+    const store = makeStore();
+    await store.hit('k', 1000, 5000);
+    await store.hit('k', 60_000, 5000);
+    await store.reset('k', 1000);
+    const after1000 = await store.hit('k', 1000, 5000);
+    expect(after1000.current).toBe(1); // cleared
+    const after60000 = await store.hit('k', 60_000, 5000);
+    expect(after60000.current).toBe(2); // untouched
+  });
+});
+
+describe('MemoryRateLimitStore — concurrency', () => {
+  it('fans out N parallel hits on the same key with no lost updates', async () => {
+    const store = makeStore();
+    const N = 200;
+    const results = await Promise.all(
+      Array.from({ length: N }, () => store.hit('concurrent-key', 1000, 5000)),
+    );
+    const currents = results.map((r) => r.current).sort((a, b) => a - b);
+    // Every increment landed exactly once: N unique sequential counts 1..N.
+    expect(currents).toEqual(Array.from({ length: N }, (_, i) => i + 1));
+  });
+
+  it('a flood of distinct keys past maxTrackedKeys drops oldest and keeps size bounded', async () => {
+    const store = makeStore({ maxTrackedKeys: 50 });
+    const N = 500;
+    await Promise.all(
+      Array.from({ length: N }, (_, i) => store.hit(`key-${i}`, 1000, 1000)),
+    );
+    expect(store.size).toBeLessThanOrEqual(50);
+  });
 });

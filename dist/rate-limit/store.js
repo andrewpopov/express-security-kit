@@ -71,7 +71,12 @@ class MemoryRateLimitStore {
         bucket.current = 0;
         bucket.windowStart = windowStart;
     }
-    async reset(key) {
+    async reset(key, windowMs) {
+        if (windowMs !== undefined) {
+            // Precise reset: delete only the bucket for this exact window length.
+            this.buckets.delete(`${key}::${windowMs}`);
+            return;
+        }
         // Buckets are namespaced as `${key}::${windowMs}`, so clear every window
         // bucket belonging to this key.
         const prefix = `${key}::`;

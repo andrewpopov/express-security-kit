@@ -22,8 +22,12 @@ export interface RateLimitStore {
    * and the current window's reset time.
    */
   hit(key: string, windowMs: number, now: number): Promise<HitResult>;
-  /** Clear all state for a key. */
-  reset(key: string): Promise<void>;
+  /**
+   * Clear state for a key. When `windowMs` is given, clears ONLY that window's
+   * bucket(s) — precise, no guessing. When omitted, clears every window bucket
+   * tracked for the key (implementation-defined scope; see each store's docs).
+   */
+  reset(key: string, windowMs?: number): Promise<void>;
   /** Release resources (timers, connections). Safe to call more than once. */
   dispose?(): void;
 }
@@ -133,7 +137,12 @@ export class MemoryRateLimitStore implements RateLimitStore {
     bucket.windowStart = windowStart;
   }
 
-  async reset(key: string): Promise<void> {
+  async reset(key: string, windowMs?: number): Promise<void> {
+    if (windowMs !== undefined) {
+      // Precise reset: delete only the bucket for this exact window length.
+      this.buckets.delete(`${key}::${windowMs}`);
+      return;
+    }
     // Buckets are namespaced as `${key}::${windowMs}`, so clear every window
     // bucket belonging to this key.
     const prefix = `${key}::`;

@@ -17,6 +17,22 @@ CHANGELOG entry.
 
 ---
 
+## 1.0.0
+
+First stable release. **No API changes from 0.8.0** — this promotes the library to
+a stable 1.x now that three services depend on it in production:
+
+- **cairn** — helmet + api-key
+- **smarthome** — helmet + api-key + audit + rate-limit
+- **stoki** — helmet + request-signing + api-key + rate-limit
+
+The public API — helmet preset (`createHelmetMiddleware`), rate limiter
+(`createRateLimiter` with `skipSuccessful` / `buildResponseBody` /
+`overrideResolver` / memory + Redis stores), api-key (`verifyApiKey`), request
+signing (`createRequestSigningVerifier`, `signRequest`, `MemoryNonceStore`), and
+audit (`AuditBuffer`) — is considered stable. Future breaking changes will bump
+the major version.
+
 ## 0.8.0
 
 ### Added (rate-limit — skipSuccessful / refund)

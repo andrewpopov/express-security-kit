@@ -34,6 +34,12 @@ export interface ApiKeyRecord {
    * by the Phase 2 verifier.
    */
   hmacSecret?: string | null;
+  /**
+   * Free-form service-specific data (e.g. `{ orgId }`). Copied to the built
+   * SecurityContext's `meta` so a service can stash data at lookup time and read
+   * it back from `outcome.context.meta` / `outcome.record.meta`.
+   */
+  meta?: Record<string, unknown>;
 }
 
 /** Hashes a raw key into its stored (hex) form. */

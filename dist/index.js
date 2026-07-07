@@ -2,7 +2,7 @@
 // Shorthand re-exports (no renaming) so cjs-module-lexer statically detects the
 // named exports for ESM consumers of the CommonJS build.
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.auditDeniedHook = exports.auditRateLimitHook = exports.auditFailureHook = exports.ConsoleAuditSink = exports.buildAuditEvent = exports.AuditBuffer = exports.MemoryNonceStore = exports.createRequestSigningVerifier = exports.sha256Hex = exports.signRequest = exports.buildCanonicalString = exports.requireScope = exports.timingSafeEqualHex = exports.scopedHmacHasher = exports.sha256Hasher = exports.createApiKeyAuth = exports.decodedJwtKey = exports.verifiedIdentityKey = exports.ipKey = exports.defaultKeyGenerator = exports.MemoryRateLimitStore = exports.createRateLimiter = exports.createHelmetMiddleware = void 0;
+exports.auditDeniedHook = exports.auditRateLimitHook = exports.auditFailureHook = exports.ConsoleAuditSink = exports.buildAuditEvent = exports.AuditBuffer = exports.MemoryNonceStore = exports.createRequestSigningVerifier = exports.sha256Hex = exports.signRequest = exports.buildCanonicalString = exports.requireScope = exports.timingSafeEqualHex = exports.scopedHmacHasher = exports.sha256Hasher = exports.verifyApiKey = exports.createApiKeyAuth = exports.decodedJwtKey = exports.verifiedIdentityKey = exports.ipKey = exports.defaultKeyGenerator = exports.MemoryRateLimitStore = exports.createRateLimiter = exports.createHelmetMiddleware = void 0;
 var createHelmetMiddleware_1 = require("./helmet/createHelmetMiddleware");
 Object.defineProperty(exports, "createHelmetMiddleware", { enumerable: true, get: function () { return createHelmetMiddleware_1.createHelmetMiddleware; } });
 var createRateLimiter_1 = require("./rate-limit/createRateLimiter");
@@ -16,6 +16,8 @@ Object.defineProperty(exports, "verifiedIdentityKey", { enumerable: true, get: f
 Object.defineProperty(exports, "decodedJwtKey", { enumerable: true, get: function () { return keyGenerator_1.decodedJwtKey; } });
 var createApiKeyAuth_1 = require("./api-key/createApiKeyAuth");
 Object.defineProperty(exports, "createApiKeyAuth", { enumerable: true, get: function () { return createApiKeyAuth_1.createApiKeyAuth; } });
+var verifyApiKey_1 = require("./api-key/verifyApiKey");
+Object.defineProperty(exports, "verifyApiKey", { enumerable: true, get: function () { return verifyApiKey_1.verifyApiKey; } });
 var hashers_1 = require("./api-key/hashers");
 Object.defineProperty(exports, "sha256Hasher", { enumerable: true, get: function () { return hashers_1.sha256Hasher; } });
 Object.defineProperty(exports, "scopedHmacHasher", { enumerable: true, get: function () { return hashers_1.scopedHmacHasher; } });

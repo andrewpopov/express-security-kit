@@ -17,6 +17,30 @@ CHANGELOG entry.
 
 ---
 
+## 0.5.0
+
+### Added
+
+- **`verifyApiKey(config, req)`** — a verify-ONLY primitive that runs the full
+  API-key verification core (extract → prefix → static-key → hash+lookup → hash
+  re-compare → expiry → IP allowlist → build context) and returns a discriminated
+  `ApiKeyVerifyOutcome` INSTEAD of sending HTTP or mutating the request. This
+  lets a service with a unified/multi-method auth flow (try `x-api-key`, else
+  JWT) reuse the kit's verification without adopting the fail-closed middleware.
+  The outcome carries `present` (false only for a genuinely ABSENT credential,
+  so callers can distinguish "fall through to another method" from "reject") and
+  `status` (403 for `ip_denied`, else 401); on success it also returns the
+  matched `record` (null for a static key). It NEVER throws (unexpected error →
+  `{ ok: false, reason: 'error', present: true, status: 401 }`), does not call
+  `onFailure`, and does not touch `req.securityContext`/`res` — but it DOES run
+  `onAuthenticated`.
+- `createApiKeyAuth` is now a thin middleware wrapper around `verifyApiKey`
+  (behavior-preserving refactor — all existing tests pass unchanged).
+- **`meta` passthrough** — `ApiKeyRecord` and `SecurityContext` gained an
+  optional `meta?: Record<string, unknown>`. A service's `lookup` can attach
+  e.g. `{ meta: { orgId } }` and read it back from `outcome.context.meta` /
+  `outcome.record.meta`; the default context builder copies it across.
+
 ## 0.4.0
 
 Phase 4 (final pillar) — buffered audit. Completes the kit: helmet, rate

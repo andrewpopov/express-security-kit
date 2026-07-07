@@ -376,6 +376,43 @@ app.post('/api/integrations/sync', canWrite, syncHandler);
 override resolver, so a per-key limit set at issue time is honored automatically
 by a downstream `createRateLimiter`.
 
+### Unified / multi-method auth (`verifyApiKey`)
+
+If a service authenticates requests by trying an API key FIRST and falling back
+to JWT (cairn, likely stoki), use the verify-only primitive `verifyApiKey` — it
+returns a decision instead of sending a response, keeping the kit out of your
+response handling and your JWT path:
+
+```ts
+import { verifyApiKey } from '@andrewpopov/express-security-kit';
+
+const apiKeyConfig = { prefix: 'cairn_', headerName: 'x-api-key', lookup };
+
+app.use(async (req, res, next) => {
+  const outcome = await verifyApiKey(apiKeyConfig, req);
+
+  if (outcome.ok) {
+    req.securityContext = outcome.context;   // e.g. outcome.context.meta.orgId
+    return next();
+  }
+
+  // `present` is false ONLY when NO api-key credential was supplied — fall
+  // through to the service's own JWT auth. A present-but-invalid key is a real
+  // failed attempt, so reject it rather than silently trying JWT.
+  if (!outcome.present) {
+    return authenticateJwt(req, res, next);
+  }
+
+  return res.status(outcome.status).json({ error: { code: 'UNAUTHORIZED' } });
+});
+```
+
+`verifyApiKey` never throws (unexpected errors fail closed to
+`{ ok: false, reason: 'error', present: true, status: 401 }`), never touches
+`res` or `req.securityContext`, and — for a matched key — returns the `record`
+so you can read fields your `lookup` stashed (including `record.meta`).
+`createApiKeyAuth` is itself just a thin middleware over `verifyApiKey`.
+
 ## Module 4 — HMAC request signing + replay protection
 
 **Opt-in.** For high-value machine-to-machine routes you can require that each

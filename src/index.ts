@@ -36,6 +36,8 @@ export type {
 export type { SecurityContext } from './types';
 
 export { createApiKeyAuth } from './api-key/createApiKeyAuth';
+export { verifyApiKey } from './api-key/verifyApiKey';
+export type { ApiKeyVerifyOutcome } from './api-key/verifyApiKey';
 export {
   sha256Hasher,
   scopedHmacHasher,

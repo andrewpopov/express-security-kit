@@ -7,5 +7,9 @@ import { ApiKeyAuthConfig } from './types';
  * unexpected error such as a throwing `lookup`) yields a GENERIC 401/403 and the
  * request does NOT proceed. This is the opposite of the rate limiter, which
  * fails open. Only the `onFailure` audit hook receives the specific reason.
+ *
+ * This is a thin middleware wrapper around {@link verifyApiKey}: it applies the
+ * `optional`-passthrough policy and translates the verification outcome into an
+ * HTTP response; the verification core lives in verifyApiKey.
  */
 export declare function createApiKeyAuth(config: ApiKeyAuthConfig): RequestHandler;

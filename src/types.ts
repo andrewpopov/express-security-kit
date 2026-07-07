@@ -25,6 +25,12 @@ export interface SecurityContext {
    * sensitive; it lives only in the in-memory request context.
    */
   hmacSecret?: string | null;
+  /**
+   * Free-form service-specific data carried on the context (e.g. an org id a
+   * service stashed on its ApiKeyRecord). Populated from `ApiKeyRecord.meta` by
+   * the default context builder.
+   */
+  meta?: Record<string, unknown>;
 }
 
 declare global {

@@ -8,6 +8,8 @@ export { defaultKeyGenerator, ipKey, verifiedIdentityKey, decodedJwtKey, } from 
 export type { KeyGenerator, DecodedJwtKeyOptions, } from './rate-limit/keyGenerator';
 export type { SecurityContext } from './types';
 export { createApiKeyAuth } from './api-key/createApiKeyAuth';
+export { verifyApiKey } from './api-key/verifyApiKey';
+export type { ApiKeyVerifyOutcome } from './api-key/verifyApiKey';
 export { sha256Hasher, scopedHmacHasher, timingSafeEqualHex, } from './api-key/hashers';
 export { requireScope } from './api-key/requireScope';
 export type { ApiKeyRecord, KeyHasher, ApiKeyAuthConfig, ApiKeyStaticKey, ApiKeyFailureReason, ApiKeyAuthLogger, } from './api-key/types';

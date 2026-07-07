@@ -81,7 +81,7 @@ try {
     const mod = require('${pkg.name}');
     const missing = [
       'createRateLimiter', 'createHelmetMiddleware',
-      'createApiKeyAuth', 'requireScope', 'sha256Hasher',
+      'createApiKeyAuth', 'verifyApiKey', 'requireScope', 'sha256Hasher',
       'scopedHmacHasher', 'timingSafeEqualHex',
       'createRequestSigningVerifier', 'signRequest',
       'buildCanonicalString', 'MemoryNonceStore',
@@ -114,7 +114,7 @@ try {
   const esmSmoke = `
     import {
       createRateLimiter, createHelmetMiddleware,
-      createApiKeyAuth, requireScope, sha256Hasher, timingSafeEqualHex,
+      createApiKeyAuth, verifyApiKey, requireScope, sha256Hasher, timingSafeEqualHex,
       createRequestSigningVerifier, signRequest, buildCanonicalString, MemoryNonceStore,
       AuditBuffer, buildAuditEvent, ConsoleAuditSink,
       auditFailureHook, auditRateLimitHook, auditDeniedHook,
@@ -122,7 +122,7 @@ try {
     import { RedisRateLimitStore } from '${pkg.name}/redis-store';
     const fns = {
       createRateLimiter, createHelmetMiddleware,
-      createApiKeyAuth, requireScope, sha256Hasher, timingSafeEqualHex,
+      createApiKeyAuth, verifyApiKey, requireScope, sha256Hasher, timingSafeEqualHex,
       createRequestSigningVerifier, signRequest, buildCanonicalString, MemoryNonceStore,
       AuditBuffer, buildAuditEvent, ConsoleAuditSink,
       auditFailureHook, auditRateLimitHook, auditDeniedHook,

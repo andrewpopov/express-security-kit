@@ -86,6 +86,26 @@ class MemoryRateLimitStore {
             }
         }
     }
+    /**
+     * Refund a hit: decrement the current-window counter for `key`, floored at 0.
+     * With `windowMs`, targets the exact `${key}::${windowMs}` bucket; without it,
+     * decrements every live bucket for the key (normally exactly one). No-op if
+     * the key/window is already gone. Never throws.
+     */
+    decrement(key, windowMs) {
+        if (windowMs !== undefined) {
+            const bucket = this.buckets.get(`${key}::${windowMs}`);
+            if (bucket && bucket.current > 0)
+                bucket.current -= 1;
+            return;
+        }
+        const prefix = `${key}::`;
+        for (const [bucketKey, bucket] of this.buckets) {
+            if (bucketKey.startsWith(prefix) && bucket.current > 0) {
+                bucket.current -= 1;
+            }
+        }
+    }
     evictIfNeeded() {
         while (this.buckets.size > this.maxTrackedKeys) {
             // Map preserves insertion order; the first key is the oldest.

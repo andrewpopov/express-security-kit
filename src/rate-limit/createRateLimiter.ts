@@ -63,6 +63,15 @@ export interface RateLimiterConfig {
    * Takes precedence over `message`.
    */
   buildResponseBody?: (info: RateLimitRejection) => unknown;
+  /**
+   * When true, REFUND (decrement) the counted hit for a request that ends with
+   * a status < 400, so only failed requests count toward the limit — mirrors
+   * express-rate-limit's `skipSuccessfulRequests` (e.g. an auth limiter where
+   * only failed logins should count). The refund fires once on response
+   * `finish`/`close`. Default false. Requires a store that implements
+   * `decrement` (the built-in Memory and Redis stores do).
+   */
+  skipSuccessful?: boolean;
   /** Emit RateLimit-* + Retry-After headers. Default true. */
   headers?: boolean;
   /** Logger for fail-open store errors. Default: console. */
@@ -276,6 +285,50 @@ function resolveResponseBody(
   return defaultBody(retryAfterSeconds, config.message);
 }
 
+/** Unique symbol flag so a request is refunded AT MOST once, even across tiers. */
+const REFUND_DONE = Symbol('express-security-kit.rateLimitRefundDone');
+
+/**
+ * For an ALLOWED request under `skipSuccessful`, hook the response once and,
+ * when it finishes with a status < 400, refund the counted hit via
+ * `store.decrement`. Handles both `finish` (normal completion) and `close` (the
+ * socket died before finish) so the listeners can't leak, and guards with a
+ * per-response symbol so the refund runs at most once. Never throws.
+ */
+function scheduleRefundOnSuccess(
+  res: Response,
+  store: RateLimitStore,
+  key: string,
+  windowMs: number,
+  now: number,
+  logger: RateLimiterLogger,
+): void {
+  const settle = (): void => {
+    const bag = res as unknown as Record<symbol, boolean>;
+    if (bag[REFUND_DONE]) return;
+    bag[REFUND_DONE] = true;
+    res.removeListener('finish', settle);
+    res.removeListener('close', settle);
+    try {
+      // Only refund a genuinely successful response.
+      if (res.statusCode < 400) {
+        void Promise.resolve(store.decrement(key, windowMs, now)).catch((err) =>
+          logger.warn('[express-security-kit] rate-limit refund failed', err),
+        );
+      }
+    } catch (err) {
+      logger.warn('[express-security-kit] rate-limit refund failed', err);
+    }
+  };
+  try {
+    res.on('finish', settle);
+    res.on('close', settle);
+  } catch (err) {
+    // If the response can't be hooked, skip the refund rather than throw.
+    logger.warn('[express-security-kit] could not hook response for refund', err);
+  }
+}
+
 function buildSingleLimiter(config: RateLimiterConfig): RequestHandler {
   const algorithm = config.algorithm ?? 'fixed';
   const keyGenerator = config.keyGenerator ?? defaultKeyGenerator;
@@ -326,6 +379,9 @@ function buildSingleLimiter(config: RateLimiterConfig): RequestHandler {
 
       if (emitHeaders) {
         applyHeaders(res, decision, now);
+      }
+      if (config.skipSuccessful) {
+        scheduleRefundOnSuccess(res, store, key, windowMs, now, logger);
       }
       return next();
     } catch (err) {

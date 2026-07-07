@@ -117,6 +117,13 @@ try {
   }
   console.log('[verify:pack] OK: RateLimitRejection type exported');
 
+  // Assert the RateLimitStore interface declares `decrement` (the refund hook).
+  const storeDts = readFileSync(join(pkgRoot, 'dist', 'rate-limit', 'store.d.ts'), 'utf8');
+  if (!/decrement\s*\(/.test(storeDts)) {
+    fail('RateLimitStore.decrement is missing from dist/rate-limit/store.d.ts');
+  }
+  console.log('[verify:pack] OK: RateLimitStore.decrement declared');
+
   // 3. Native ESM import smoke (catches the member-expression export bug).
   const esmSmoke = `
     import {

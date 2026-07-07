@@ -7,6 +7,7 @@ import type { HitResult, RateLimitStore } from './store';
  */
 export interface RedisLikeClient {
     incr(key: string): Promise<number>;
+    decr(key: string): Promise<number>;
     pexpire(key: string, ms: number): Promise<unknown>;
     get(key: string): Promise<string | null>;
     del(...keys: string[]): Promise<unknown>;
@@ -68,4 +69,19 @@ export declare class RedisRateLimitStore implements RateLimitStore {
      * until the window naturally expires — pass `windowMs` for an exact reset.
      */
     reset(key: string, windowMs?: number): Promise<void>;
+    /**
+     * Refund a hit by decrementing the current-window bucket, floored at 0.
+     *
+     * With `windowMs`/`now` (as `createRateLimiter` passes — the SAME values used
+     * for the matching `hit`), targets the EXACT bucket that was incremented.
+     * Without them, decrements the current bucket across a fixed set of common
+     * window sizes ({@link RESET_WINDOW_GUESSES}) — best-effort, like `reset`.
+     *
+     * Uses an atomic conditional-DECR Lua script when the client supports `eval`
+     * (never creates a phantom key or goes negative); otherwise falls back to a
+     * non-atomic GET-then-DECR (test-double path). Never a bare DECR.
+     */
+    decrement(key: string, windowMs?: number, now?: number): Promise<void>;
+    /** Decrement a single bucket key iff it exists and is > 0. Never negative. */
+    private decrementBucket;
 }

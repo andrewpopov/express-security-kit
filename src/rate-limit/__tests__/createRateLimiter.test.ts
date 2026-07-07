@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
+import { EventEmitter } from 'node:events';
 import type { Request } from 'express';
 import { createRateLimiter, RateLimiterConfig } from '../createRateLimiter';
 import { MemoryRateLimitStore, RateLimitStore } from '../store';
@@ -524,5 +525,130 @@ describe('dual-tier', () => {
     const req = makeReq({ securityContext: { principalType: 'apiKey', keyId: 'kid' } });
     expect((await invoke(mw, req)).nextCalled).toBe(true);
     expect((await invoke(mw, req)).nextCalled).toBe(false); // per-key tier trips
+  });
+});
+
+describe('skipSuccessful (refund on success)', () => {
+  /** A res that is an EventEmitter so the limiter can hook finish/close. */
+  function makeEventRes(onDone: () => void): any {
+    const res: any = new EventEmitter();
+    res.statusCode = 200;
+    res.headers = {};
+    res.headersSent = false;
+    res.setHeader = (n: string, v: string) => {
+      res.headers[n] = String(v);
+    };
+    res.status = (c: number) => {
+      res.statusCode = c;
+      return res;
+    };
+    res.json = (p: unknown) => {
+      res.body = p;
+      res.headersSent = true;
+      onDone();
+      return res;
+    };
+    return res;
+  }
+
+  /**
+   * Run the limiter once. If allowed, simulate the route ending with
+   * `finalStatus` by setting res.statusCode and emitting 'finish' (which is when
+   * the refund fires). Returns whether next() was called + the res.
+   */
+  async function drive(
+    mw: ReturnType<typeof createRateLimiter>,
+    req: Request,
+    finalStatus = 200,
+    endEvent: 'finish' | 'close' = 'finish',
+  ): Promise<{ nextCalled: boolean; res: any }> {
+    let nextCalled = false;
+    const res = await new Promise<any>((resolve) => {
+      const r = makeEventRes(() => resolve(r));
+      mw(req, r, () => {
+        nextCalled = true;
+        resolve(r);
+      });
+    });
+    if (nextCalled) {
+      res.statusCode = finalStatus;
+      res.emit(endEvent);
+    }
+    return { nextCalled, res };
+  }
+
+  it('refunds a successful (<400) request so it does not count', async () => {
+    const store = makeStore();
+    const mw = createRateLimiter({ windowMs: 5000, max: 1, skipSuccessful: true, store, now: () => 10_000 });
+    const r = makeReq();
+    // Every request ends 200 and is refunded, so a burst well past max:1 passes.
+    for (let i = 0; i < 5; i++) {
+      const { nextCalled } = await drive(mw, r, 200);
+      expect(nextCalled).toBe(true);
+    }
+  });
+
+  it('does NOT refund a 4xx or 5xx response (still counts)', async () => {
+    const store = makeStore();
+    const mw = createRateLimiter({ windowMs: 5000, max: 1, skipSuccessful: true, store, now: () => 10_000 });
+    const r = makeReq();
+    expect((await drive(mw, r, 500)).nextCalled).toBe(true); // counts (no refund)
+    expect((await drive(mw, r, 400)).nextCalled).toBe(false); // blocked
+  });
+
+  it('N successes keep a maxed limiter open; N failures then close it', async () => {
+    const store = makeStore();
+    const mw = createRateLimiter({ windowMs: 5000, max: 3, skipSuccessful: true, store, now: () => 10_000 });
+    const r = makeReq();
+    // 5 successes — all refunded, limiter never fills.
+    for (let i = 0; i < 5; i++) expect((await drive(mw, r, 200)).nextCalled).toBe(true);
+    // Now 3 failures fill the window (max 3), the 4th is blocked.
+    expect((await drive(mw, r, 500)).nextCalled).toBe(true);
+    expect((await drive(mw, r, 500)).nextCalled).toBe(true);
+    expect((await drive(mw, r, 500)).nextCalled).toBe(true);
+    expect((await drive(mw, r, 500)).nextCalled).toBe(false); // closed
+  });
+
+  it('never refunds a rejected (429) request; counter never goes negative', async () => {
+    const store = makeStore();
+    const decrementSpy = vi.spyOn(store, 'decrement');
+    const mw = createRateLimiter({ windowMs: 5000, max: 1, skipSuccessful: true, store, now: () => 10_000 });
+    const r = makeReq();
+    expect((await drive(mw, r, 500)).nextCalled).toBe(true); // counts, no refund
+    // This one is rejected (429). Even if its response emits finish, no refund
+    // was scheduled for a rejected request.
+    const blocked = await drive(mw, r, 429);
+    expect(blocked.nextCalled).toBe(false);
+    blocked.res.emit('finish'); // no listener → no-op
+    expect(decrementSpy).not.toHaveBeenCalled();
+    // Still blocked — the counter was not refunded down.
+    expect((await drive(mw, r, 200)).nextCalled).toBe(false);
+  });
+
+  it('refunds at most once even if both finish and close fire', async () => {
+    const store = makeStore();
+    const decrementSpy = vi.spyOn(store, 'decrement');
+    const mw = createRateLimiter({ windowMs: 5000, max: 5, skipSuccessful: true, store, now: () => 10_000 });
+    const res = (await drive(mw, makeReq(), 200, 'finish')).res;
+    res.emit('close'); // second terminal event — must NOT double-refund
+    expect(decrementSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('refunds on close when the socket dies before finish (still <400)', async () => {
+    const store = makeStore();
+    const decrementSpy = vi.spyOn(store, 'decrement');
+    const mw = createRateLimiter({ windowMs: 5000, max: 5, skipSuccessful: true, store, now: () => 10_000 });
+    await drive(mw, makeReq(), 200, 'close');
+    expect(decrementSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('default (skipSuccessful unset) does NOT refund — no regression', async () => {
+    const store = makeStore();
+    const decrementSpy = vi.spyOn(store, 'decrement');
+    const mw = createRateLimiter({ windowMs: 5000, max: 1, store, now: () => 10_000 });
+    const r = makeReq();
+    expect((await drive(mw, r, 200)).nextCalled).toBe(true);
+    expect((await drive(mw, r, 200)).nextCalled).toBe(false); // 2nd blocked (counted)
+    expect(decrementSpy).not.toHaveBeenCalled();
   });
 });

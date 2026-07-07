@@ -19,6 +19,17 @@ if p and redis.call('PTTL', KEYS[2]) < 0 then redis.call('PEXPIRE', KEYS[2], ARG
 return { c, p or '0' }
 `;
 /**
+ * Atomic refund script. KEYS = [currentKey]. Decrements only when the counter
+ * exists and is > 0, so it never creates a phantom key or drives a counter
+ * negative (a bare DECR on a missing key would set it to -1). Returns the value
+ * after the (possible) decrement.
+ */
+const DECREMENT_SCRIPT = `
+local v = tonumber(redis.call('GET', KEYS[1]))
+if v and v > 0 then return redis.call('DECR', KEYS[1]) end
+return v or 0
+`;
+/**
  * Coerce a Lua-script return value to a non-negative integer, or throw. STRICT
  * on purpose: only a real non-negative integer (ioredis returns Lua numbers as
  * JS numbers) or a pure-digit string (GET returns strings) is accepted. `null`,
@@ -129,6 +140,42 @@ class RedisRateLimitStore {
             keysToDelete.push(this.bucketKey(key, guessWindowMs, idx), this.bucketKey(key, guessWindowMs, idx - 1));
         }
         await this.client.del(...keysToDelete);
+    }
+    /**
+     * Refund a hit by decrementing the current-window bucket, floored at 0.
+     *
+     * With `windowMs`/`now` (as `createRateLimiter` passes — the SAME values used
+     * for the matching `hit`), targets the EXACT bucket that was incremented.
+     * Without them, decrements the current bucket across a fixed set of common
+     * window sizes ({@link RESET_WINDOW_GUESSES}) — best-effort, like `reset`.
+     *
+     * Uses an atomic conditional-DECR Lua script when the client supports `eval`
+     * (never creates a phantom key or goes negative); otherwise falls back to a
+     * non-atomic GET-then-DECR (test-double path). Never a bare DECR.
+     */
+    async decrement(key, windowMs, now = Date.now()) {
+        if (windowMs !== undefined) {
+            const windowIndex = Math.floor(now / windowMs);
+            await this.decrementBucket(this.bucketKey(key, windowMs, windowIndex));
+            return;
+        }
+        for (const guessWindowMs of RESET_WINDOW_GUESSES) {
+            const idx = Math.floor(now / guessWindowMs);
+            await this.decrementBucket(this.bucketKey(key, guessWindowMs, idx));
+        }
+    }
+    /** Decrement a single bucket key iff it exists and is > 0. Never negative. */
+    async decrementBucket(bucketKey) {
+        if (typeof this.client.eval === 'function') {
+            await this.client.eval(DECREMENT_SCRIPT, 1, bucketKey);
+            return;
+        }
+        // Non-atomic fallback (test doubles without eval).
+        const raw = await this.client.get(bucketKey);
+        const value = raw ? Number.parseInt(raw, 10) || 0 : 0;
+        if (value > 0) {
+            await this.client.decr(bucketKey);
+        }
     }
 }
 exports.RedisRateLimitStore = RedisRateLimitStore;

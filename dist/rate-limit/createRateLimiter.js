@@ -150,6 +150,42 @@ function resolveResponseBody(req, decision, key, retryAfterSeconds, config) {
     }
     return defaultBody(retryAfterSeconds, config.message);
 }
+/** Unique symbol flag so a request is refunded AT MOST once, even across tiers. */
+const REFUND_DONE = Symbol('express-security-kit.rateLimitRefundDone');
+/**
+ * For an ALLOWED request under `skipSuccessful`, hook the response once and,
+ * when it finishes with a status < 400, refund the counted hit via
+ * `store.decrement`. Handles both `finish` (normal completion) and `close` (the
+ * socket died before finish) so the listeners can't leak, and guards with a
+ * per-response symbol so the refund runs at most once. Never throws.
+ */
+function scheduleRefundOnSuccess(res, store, key, windowMs, now, logger) {
+    const settle = () => {
+        const bag = res;
+        if (bag[REFUND_DONE])
+            return;
+        bag[REFUND_DONE] = true;
+        res.removeListener('finish', settle);
+        res.removeListener('close', settle);
+        try {
+            // Only refund a genuinely successful response.
+            if (res.statusCode < 400) {
+                void Promise.resolve(store.decrement(key, windowMs, now)).catch((err) => logger.warn('[express-security-kit] rate-limit refund failed', err));
+            }
+        }
+        catch (err) {
+            logger.warn('[express-security-kit] rate-limit refund failed', err);
+        }
+    };
+    try {
+        res.on('finish', settle);
+        res.on('close', settle);
+    }
+    catch (err) {
+        // If the response can't be hooked, skip the refund rather than throw.
+        logger.warn('[express-security-kit] could not hook response for refund', err);
+    }
+}
 function buildSingleLimiter(config) {
     const algorithm = config.algorithm ?? 'fixed';
     const keyGenerator = config.keyGenerator ?? keyGenerator_1.defaultKeyGenerator;
@@ -183,6 +219,9 @@ function buildSingleLimiter(config) {
             }
             if (emitHeaders) {
                 applyHeaders(res, decision, now);
+            }
+            if (config.skipSuccessful) {
+                scheduleRefundOnSuccess(res, store, key, windowMs, now, logger);
             }
             return next();
         }

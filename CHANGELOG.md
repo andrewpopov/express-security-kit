@@ -17,6 +17,37 @@ CHANGELOG entry.
 
 ---
 
+## 0.8.0
+
+### Added (rate-limit — skipSuccessful / refund)
+
+- **`RateLimiterConfig.skipSuccessful?: boolean`** (default false, opt-in,
+  non-breaking) — when true, a request that ends with a status `< 400` is
+  REFUNDED (its counted hit is decremented) so only failed requests count toward
+  the limit, mirroring express-rate-limit's `skipSuccessfulRequests` (e.g. an
+  auth limiter where only failed logins should count). Default behavior is
+  unchanged when the flag is unset.
+- **`RateLimitStore.decrement(key, windowMs?, now?)`** added to the store
+  interface. `MemoryRateLimitStore` and `RedisRateLimitStore` both implement it,
+  flooring at 0 and targeting the EXACT bucket the matching `hit` incremented
+  (the `windowMs`/`now` passed are the same values used for that `hit`). The
+  Redis path uses a conditional-DECR Lua script (never a phantom key, never
+  negative); an eval-less test double falls back to non-atomic GET-then-DECR.
+
+### Fixed (skipSuccessful refund semantics — Codex review)
+
+- The refund fires ONLY on response `finish`. A `close` without `finish` is an
+  aborted request (status not final — often still the default 200) and is NOT
+  refunded; `close` only cleans up listeners.
+- `MemoryRateLimitStore.decrement` targets the hit-time window: if the bucket
+  rolled between `hit` and refund, the original hit's count moved into
+  `previous`, so it decrements `previous` (or no-ops if the window fully
+  expired) rather than an unrelated current-window request.
+- The refund guard is per-LIMITER (a unique symbol per built limiter), so
+  tiered limiters each refund their own counted hit.
+- The two fail-open paths and the refund catch route through `safeWarn`, so a
+  throwing custom `logger` can't turn a store blip into a 500.
+
 ## 0.7.0
 
 ### Changed (rate-limit store — correctness hardening)

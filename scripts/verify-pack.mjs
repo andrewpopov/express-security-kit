@@ -110,6 +110,13 @@ try {
   if (!cjsOut.includes('CJS OK')) fail('CommonJS smoke did not report OK');
   console.log('[verify:pack] OK: CommonJS require exposes named exports');
 
+  // Assert the RateLimitRejection type ships in the packed declarations.
+  const dtsIndex = readFileSync(join(pkgRoot, 'dist', 'index.d.ts'), 'utf8');
+  if (!dtsIndex.includes('RateLimitRejection')) {
+    fail('RateLimitRejection type is not exported from dist/index.d.ts');
+  }
+  console.log('[verify:pack] OK: RateLimitRejection type exported');
+
   // 3. Native ESM import smoke (catches the member-expression export bug).
   const esmSmoke = `
     import {

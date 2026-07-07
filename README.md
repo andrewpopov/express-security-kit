@@ -271,6 +271,30 @@ app.use(['/api/auth/login', '/api/auth/register', '/api/auth/reset-password'], a
 app.use('/api', apiLimiter);
 ```
 
+### Recipe: matching your own error envelope (`message` / `buildResponseBody`)
+
+The default 429 body is `{ error: { code: 'RATE_LIMITED', message, retryAfter } }`.
+To match a different app-wide envelope (e.g. smarthome's `{ error: '<string>' }`),
+pass `buildResponseBody`; to just reword the default, pass `message`:
+
+```ts
+// smarthome: whole-body override to match its { error: string } shape
+createRateLimiter({
+  windowMs: 60_000,
+  max: 100,
+  buildResponseBody: ({ retryAfterSeconds }) =>
+    ({ error: `Too many requests, retry in ${retryAfterSeconds}s` }),
+});
+
+// just change the message, keep the default envelope + code
+createRateLimiter({ windowMs: 60_000, max: 100, message: 'Slow down, please.' });
+```
+
+Status stays 429 and the `RateLimit-*` / `Retry-After` headers are still emitted.
+A throwing `buildResponseBody` falls back to the default body (logged) — it can
+never crash the middleware. Precedence: `buildResponseBody` > `message` >
+default. Omit both and the body is byte-identical to prior versions.
+
 ## Module 3 — API-key auth
 
 `createApiKeyAuth(config)` verifies a presented key and populates

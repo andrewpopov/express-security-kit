@@ -634,12 +634,40 @@ describe('skipSuccessful (refund on success)', () => {
     expect(decrementSpy).toHaveBeenCalledTimes(1);
   });
 
-  it('refunds on close when the socket dies before finish (still <400)', async () => {
+  it('does NOT refund on close when the socket aborts before finish', async () => {
+    // On a client abort, `close` fires while res.statusCode is still the default
+    // 200 (the route never set its real status — e.g. a failed login it hadn't
+    // yet marked 401). Refunding there would credit a request that never
+    // completed, so the refund is scheduled ONLY on `finish`.
     const store = makeStore();
     const decrementSpy = vi.spyOn(store, 'decrement');
     const mw = createRateLimiter({ windowMs: 5000, max: 5, skipSuccessful: true, store, now: () => 10_000 });
     await drive(mw, makeReq(), 200, 'close');
-    expect(decrementSpy).toHaveBeenCalledTimes(1);
+    expect(decrementSpy).not.toHaveBeenCalled();
+  });
+
+  it('tiered limiters on one response each refund their own counted hit', async () => {
+    // Two limiters both count the same request; with a per-LIMITER refund guard
+    // both refund on finish. A per-response guard would let only the first tier
+    // refund (and the second would appear permanently counted).
+    const storeA = makeStore();
+    const storeB = makeStore();
+    const decA = vi.spyOn(storeA, 'decrement');
+    const decB = vi.spyOn(storeB, 'decrement');
+    const mwA = createRateLimiter({ windowMs: 5000, max: 5, skipSuccessful: true, store: storeA, now: () => 10_000 });
+    const mwB = createRateLimiter({ windowMs: 5000, max: 5, skipSuccessful: true, store: storeB, now: () => 10_000 });
+    const req = makeReq();
+    const res = makeEventRes(() => {});
+    await new Promise<void>((resolve) => {
+      void mwA(req, res, () => resolve());
+    });
+    await new Promise<void>((resolve) => {
+      void mwB(req, res, () => resolve());
+    });
+    res.statusCode = 200;
+    res.emit('finish');
+    expect(decA).toHaveBeenCalledTimes(1);
+    expect(decB).toHaveBeenCalledTimes(1);
   });
 
   it('default (skipSuccessful unset) does NOT refund — no regression', async () => {

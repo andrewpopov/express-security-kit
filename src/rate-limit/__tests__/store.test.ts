@@ -108,6 +108,20 @@ describe('MemoryRateLimitStore', () => {
     expect(after.current).toBe(2); // 2 - 1 + 1
   });
 
+  it('decrement(key, windowMs, now) refunds the hit-time window after a roll', async () => {
+    // A hit lands in window N; before its refund fires, a later hit rolls the
+    // bucket to N+1, moving N's count into `previous`. The refund (carrying the
+    // ORIGINAL hit-time `now`) must decrement `previous`, NOT the unrelated
+    // current-window request — otherwise it double-counts and never refunds N.
+    const store = makeStore();
+    await store.hit('k', 5000, 10_000); // window N [10000,15000): current = 1
+    await store.hit('k', 5000, 16_000); // rolls to N+1: previous = 1, current = 1
+    store.decrement('k', 5000, 10_000); // refund the FIRST hit (its window is N)
+    const after = await store.hit('k', 5000, 16_000); // same window N+1, current += 1
+    expect(after.previous).toBe(0); // N's count was refunded out of `previous`
+    expect(after.current).toBe(2); // the two N+1 hits are untouched
+  });
+
   it('evicts oldest keys past MAX_TRACKED_KEYS', async () => {
     const store = makeStore({ maxTrackedKeys: 3 });
     await store.hit('a', 1000, 1000);

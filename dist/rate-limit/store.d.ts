@@ -75,12 +75,16 @@ export declare class MemoryRateLimitStore implements RateLimitStore {
     private rollWindow;
     reset(key: string, windowMs?: number): Promise<void>;
     /**
-     * Refund a hit: decrement the current-window counter for `key`, floored at 0.
-     * With `windowMs`, targets the exact `${key}::${windowMs}` bucket; without it,
-     * decrements every live bucket for the key (normally exactly one). No-op if
-     * the key/window is already gone. Never throws.
+     * Refund a hit, floored at 0. With `windowMs`/`now` (the SAME values used for
+     * the matching `hit`), targets the EXACT sub-counter the hit landed in: the
+     * hit incremented the window containing `now`, but by refund time the bucket
+     * may have rolled, moving that count into `previous` (exactly one roll) or
+     * expiring it (a larger gap). Decrementing `bucket.current` unconditionally
+     * would refund an unrelated later request and leave the real hit counted.
+     * Without `windowMs`/`now` it best-effort decrements current bucket(s). No-op
+     * if the key/window is gone. Never throws.
      */
-    decrement(key: string, windowMs?: number): void;
+    decrement(key: string, windowMs?: number, now?: number): void;
     private evictIfNeeded;
     private cleanup;
     /** Clear the cleanup timer. Alias of dispose() for ergonomic test teardown. */

@@ -290,6 +290,171 @@ describe('skip and onLimit', () => {
   });
 });
 
+describe('custom 429 response body', () => {
+  /** Exhaust a max:1 limiter and return the rejected response. */
+  async function reject(overrides: Partial<RateLimiterConfig>): Promise<FakeResult> {
+    const store = makeStore();
+    const mw = createRateLimiter({ windowMs: 2000, max: 1, store, now: () => 10_000, ...overrides });
+    const r = makeReq();
+    await invoke(mw, r); // consume the single allowance
+    return invoke(mw, r); // this one is rejected
+  }
+
+  it('default body is byte-unchanged when neither option is set', async () => {
+    const res = await reject({});
+    expect(res.status).toBe(429);
+    expect(res.body).toEqual({
+      error: {
+        code: 'RATE_LIMITED',
+        message: 'Too many requests. Please retry later.',
+        retryAfter: 2, // 2000ms window
+      },
+    });
+  });
+
+  it('message overrides only the message text; code + shape unchanged', async () => {
+    const res = await reject({ message: 'Slow down!' });
+    expect(res.body).toEqual({
+      error: { code: 'RATE_LIMITED', message: 'Slow down!', retryAfter: 2 },
+    });
+  });
+
+  it('buildResponseBody fully replaces the envelope; headers + 429 still present', async () => {
+    const res = await reject({
+      buildResponseBody: () => ({ error: 'Too many requests' }),
+    });
+    expect(res.status).toBe(429);
+    expect(res.body).toEqual({ error: 'Too many requests' });
+    // default envelope is NOT used
+    expect(res.body).not.toHaveProperty('error.code');
+    expect(res.headers['RateLimit-Limit']).toBe('1');
+    expect(res.headers['Retry-After']).toBe('2');
+  });
+
+  it('buildResponseBody receives correct rejection info', async () => {
+    let seen: any;
+    await reject({
+      keyGenerator: ipKey,
+      buildResponseBody: (info) => {
+        seen = info;
+        return { error: 'nope' };
+      },
+    });
+    expect(seen).toMatchObject({
+      limit: 1,
+      remaining: 0,
+      resetAt: 12_000,
+      retryAfterSeconds: 2,
+      key: 'ip:1.2.3.4',
+    });
+    expect(seen.req).toBeDefined();
+  });
+
+  it('a throwing buildResponseBody falls back to the default body + logs', async () => {
+    const warn = vi.fn();
+    const res = await reject({
+      logger: { warn },
+      buildResponseBody: () => {
+        throw new Error('formatter boom');
+      },
+    });
+    expect(res.status).toBe(429);
+    expect(res.body).toEqual({
+      error: {
+        code: 'RATE_LIMITED',
+        message: 'Too many requests. Please retry later.',
+        retryAfter: 2,
+      },
+    });
+    expect(warn).toHaveBeenCalled();
+  });
+
+  it('a throwing buildResponseBody falls back honoring message', async () => {
+    const res = await reject({
+      logger: { warn: vi.fn() },
+      message: 'Custom fallback',
+      buildResponseBody: () => {
+        throw new Error('boom');
+      },
+    });
+    expect(res.body).toEqual({
+      error: { code: 'RATE_LIMITED', message: 'Custom fallback', retryAfter: 2 },
+    });
+  });
+
+  it('a nullish buildResponseBody return falls back to the default body (not empty)', async () => {
+    const res = await reject({
+      buildResponseBody: () => undefined,
+    });
+    expect(res.status).toBe(429);
+    expect(res.body).toEqual({
+      error: {
+        code: 'RATE_LIMITED',
+        message: 'Too many requests. Please retry later.',
+        retryAfter: 2,
+      },
+    });
+  });
+
+  it('an async buildResponseBody is rejected and falls back to the default body', async () => {
+    const warn = vi.fn();
+    const res = await reject({
+      logger: { warn },
+      // eslint-disable-next-line @typescript-eslint/require-await
+      buildResponseBody: async () => ({ error: 'nope' }),
+    });
+    expect(res.status).toBe(429);
+    expect(res.body).toEqual({
+      error: {
+        code: 'RATE_LIMITED',
+        message: 'Too many requests. Please retry later.',
+        retryAfter: 2,
+      },
+    });
+    expect(warn).toHaveBeenCalled();
+  });
+
+  it('a non-JSON-serializable buildResponseBody return falls back to the default body', async () => {
+    const warn = vi.fn();
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    const res = await reject({
+      logger: { warn },
+      buildResponseBody: () => circular,
+    });
+    expect(res.status).toBe(429);
+    expect(res.body).toEqual({
+      error: {
+        code: 'RATE_LIMITED',
+        message: 'Too many requests. Please retry later.',
+        retryAfter: 2,
+      },
+    });
+    expect(warn).toHaveBeenCalled();
+  });
+
+  it('a throwing logger does not prevent the default body on a bad formatter', async () => {
+    const res = await reject({
+      logger: {
+        warn: () => {
+          throw new Error('logger boom');
+        },
+      },
+      buildResponseBody: () => {
+        throw new Error('formatter boom');
+      },
+    });
+    expect(res.status).toBe(429);
+    expect(res.body).toEqual({
+      error: {
+        code: 'RATE_LIMITED',
+        message: 'Too many requests. Please retry later.',
+        retryAfter: 2,
+      },
+    });
+  });
+});
+
 describe('fail-open', () => {
   it('allows the request when the store throws', async () => {
     const throwingStore: RateLimitStore = {

@@ -17,6 +17,32 @@ CHANGELOG entry.
 
 ---
 
+## 0.6.0
+
+### Added
+
+- **Custom rate-limit 429 response body** (non-breaking). `createRateLimiter`
+  config gains two options so a service can match its own API error envelope:
+  - `message?: string` — overrides ONLY the message text inside the default
+    envelope (`{ error: { code: 'RATE_LIMITED', message, retryAfter } }`); the
+    shape and code are unchanged.
+  - `buildResponseBody?: (info: RateLimitRejection) => unknown` — returns the
+    ENTIRE JSON body, replacing the default envelope (e.g. smarthome's
+    `{ error: '<string>' }`). `RateLimitRejection` (`{ limit, remaining, resetAt,
+    retryAfterSeconds, key, req }`) is exported. A throwing formatter can never
+    break the response — it falls back to the default body (honoring `message`)
+    and logs via the configured logger; status stays 429 and headers are still
+    emitted.
+  - A custom body is validated before it is sent: a nullish return, a thenable
+    (async formatters are rejected — the body is resolved synchronously), or a
+    non-JSON-serializable value (circular / `BigInt`, which would make
+    `res.json` throw into Express's error path) all fall back to the default
+    body + log, so a custom formatter can never break the 429. Logging itself is
+    guarded so a throwing logger cannot suppress the fallback body.
+  - Precedence: `buildResponseBody` > `message` > default. When neither is set
+    the 429 body is **byte-unchanged**, so existing adopters (e.g. cairn) are
+    unaffected.
+
 ## 0.5.0
 
 ### Added

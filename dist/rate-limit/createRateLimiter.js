@@ -90,13 +90,65 @@ function rejectRequest(req, res, decision, key, config, emitHeaders, now) {
             logger.warn('[express-security-kit] onLimit hook threw', err);
         }
     }
-    res.status(429).json({
+    res.status(429).json(resolveResponseBody(req, decision, key, retryAfterSeconds, config));
+}
+const DEFAULT_RATE_LIMIT_MESSAGE = 'Too many requests. Please retry later.';
+/** Build the default 429 envelope, optionally with a custom message. */
+function defaultBody(retryAfterSeconds, message) {
+    return {
         error: {
             code: 'RATE_LIMITED',
-            message: 'Too many requests. Please retry later.',
+            message: message ?? DEFAULT_RATE_LIMIT_MESSAGE,
             retryAfter: retryAfterSeconds,
         },
-    });
+    };
+}
+/**
+ * Resolve the 429 JSON body per precedence: `buildResponseBody` (fully custom)
+ * > `message` (default envelope, custom message) > default. A throwing
+ * `buildResponseBody` falls back to the default body (logged) so a formatter
+ * can never crash the middleware.
+ */
+/** Log a warning without ever letting a throwing logger break the response. */
+function safeWarn(config, message, err) {
+    try {
+        (config.logger ?? consoleLogger).warn(message, err);
+    }
+    catch {
+        // A logger that throws must not prevent the default body from being sent.
+    }
+}
+function resolveResponseBody(req, decision, key, retryAfterSeconds, config) {
+    if (config.buildResponseBody) {
+        try {
+            const custom = config.buildResponseBody({
+                limit: decision.limit,
+                remaining: decision.remaining,
+                resetAt: decision.resetAt,
+                retryAfterSeconds,
+                key,
+                req,
+            });
+            // A nullish return is treated as "no custom body" rather than sending an
+            // empty 429 — guards against a formatter that forgets to return.
+            if (custom !== undefined && custom !== null) {
+                // The body is resolved synchronously and handed straight to res.json, so
+                // a custom body must never be able to break the 429. Reject a thenable
+                // (an async formatter would serialize as `{}` and could leak a rejected
+                // promise) and anything not JSON-serializable (a circular object or
+                // BigInt would make res.json throw into Express's error path).
+                if (typeof custom.then === 'function') {
+                    throw new Error('buildResponseBody must be synchronous (returned a thenable)');
+                }
+                JSON.stringify(custom);
+                return custom;
+            }
+        }
+        catch (err) {
+            safeWarn(config, '[express-security-kit] buildResponseBody produced an invalid body; using default', err);
+        }
+    }
+    return defaultBody(retryAfterSeconds, config.message);
 }
 function buildSingleLimiter(config) {
     const algorithm = config.algorithm ?? 'fixed';

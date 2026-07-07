@@ -4,6 +4,8 @@ import type { AuditEvent } from './types';
 export interface AuditHookOptions {
     /** Injectable clock forwarded to buildAuditEvent. */
     now?: () => number;
+    /** Id generator forwarded to buildAuditEvent (default crypto.randomUUID). */
+    id?: () => string;
 }
 /**
  * Adapter for `createApiKeyAuth.onFailure` / signing verifier `onFailure`.

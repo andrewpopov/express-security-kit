@@ -305,6 +305,44 @@ describe('AuditBuffer.close', () => {
   });
 });
 
+describe('AuditBuffer — concurrency under sustained load', () => {
+  it('never runs two flushes concurrently and always respects maxQueueSize', async () => {
+    let inFlight = 0;
+    let maxInFlight = 0;
+    let writeCount = 0;
+    const sink: AuditSink = {
+      write: async (events) => {
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        writeCount += 1;
+        // Slow sink, without relying on real timers.
+        await Promise.resolve();
+        await Promise.resolve();
+        inFlight -= 1;
+        void events;
+      },
+    };
+    const buf = new AuditBuffer({ sink, maxBufferSize: 5, maxQueueSize: 20, ...noTimer });
+
+    for (let i = 0; i < 100; i++) {
+      buf.record(ev(`e${i}`));
+      // The hard cap is enforced synchronously inside record(), independent
+      // of flush timing.
+      expect(buf.size).toBeLessThanOrEqual(20);
+    }
+
+    // Bounded drain loop rather than an unconditional while(true).
+    for (let i = 0; i < 30 && buf.size > 0; i++) {
+      await buf.flush();
+    }
+
+    expect(maxInFlight).toBe(1);
+    expect(buf.size).toBe(0);
+    expect(writeCount).toBeGreaterThan(0);
+    buf.stop();
+  });
+});
+
 describe('AuditBuffer sink batch isolation', () => {
   it('a sink that mutates then throws does not corrupt the re-queue', async () => {
     let failNext = true;

@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.buildAuditEvent = buildAuditEvent;
+const node_crypto_1 = require("node:crypto");
 /**
  * Normalize a request + outcome into an {@link AuditEvent}, pulling
  * principalType/principalId/keyId from `req.securityContext` and ip/method/path
@@ -21,6 +22,12 @@ function buildAuditEvent(req, input, options = {}) {
         action: input.action,
         outcome: input.outcome,
     };
+    try {
+        event.id = (options.id ?? node_crypto_1.randomUUID)();
+    }
+    catch {
+        // Id generation must never break event construction — omit it on throw.
+    }
     try {
         const ctx = req?.securityContext;
         if (ctx) {

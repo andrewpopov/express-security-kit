@@ -10,6 +10,15 @@ export interface RateLimitOverride {
     windowMs: number;
     max: number;
 }
+/** Context passed to a custom `buildResponseBody` formatter on a 429. */
+export interface RateLimitRejection {
+    limit: number;
+    remaining: number;
+    resetAt: number;
+    retryAfterSeconds: number;
+    key: string;
+    req: Request;
+}
 export interface RateLimiterConfig {
     /** Window length in ms. */
     windowMs: number;
@@ -33,6 +42,29 @@ export interface RateLimiterConfig {
      * rejected promise is swallowed (logged) and NEVER prevents the 429.
      */
     onLimit?: (req: Request, key: string) => void | Promise<unknown>;
+    /**
+     * Override ONLY the message text inside the default 429 envelope. The default
+     * body shape (`{ error: { code: 'RATE_LIMITED', message, retryAfter } }`) and
+     * code are unchanged. Ignored when `buildResponseBody` is set.
+     */
+    message?: string;
+    /**
+     * Return the ENTIRE 429 JSON body, replacing the default envelope — so a
+     * service can match its own API error shape. A throwing formatter can never
+     * break the response: on throw the default body is sent and the error logged.
+     * Takes precedence over `message`.
+     */
+    buildResponseBody?: (info: RateLimitRejection) => unknown;
+    /**
+     * When true, REFUND (decrement) the counted hit for a request that ends with
+     * a status < 400, so only failed requests count toward the limit — mirrors
+     * express-rate-limit's `skipSuccessfulRequests` (e.g. an auth limiter where
+     * only failed logins should count). The refund fires once on response
+     * `finish` (a genuinely completed response); a `close` without `finish` is an
+     * aborted request and is NOT refunded. Default false. Requires a store that
+     * implements `decrement` (the built-in Memory and Redis stores do).
+     */
+    skipSuccessful?: boolean;
     /** Emit RateLimit-* + Retry-After headers. Default true. */
     headers?: boolean;
     /** Logger for fail-open store errors. Default: console. */

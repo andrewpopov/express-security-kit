@@ -110,6 +110,20 @@ try {
   if (!cjsOut.includes('CJS OK')) fail('CommonJS smoke did not report OK');
   console.log('[verify:pack] OK: CommonJS require exposes named exports');
 
+  // Assert the RateLimitRejection type ships in the packed declarations.
+  const dtsIndex = readFileSync(join(pkgRoot, 'dist', 'index.d.ts'), 'utf8');
+  if (!dtsIndex.includes('RateLimitRejection')) {
+    fail('RateLimitRejection type is not exported from dist/index.d.ts');
+  }
+  console.log('[verify:pack] OK: RateLimitRejection type exported');
+
+  // Assert the RateLimitStore interface declares `decrement` (the refund hook).
+  const storeDts = readFileSync(join(pkgRoot, 'dist', 'rate-limit', 'store.d.ts'), 'utf8');
+  if (!/decrement\s*\(/.test(storeDts)) {
+    fail('RateLimitStore.decrement is missing from dist/rate-limit/store.d.ts');
+  }
+  console.log('[verify:pack] OK: RateLimitStore.decrement declared');
+
   // 3. Native ESM import smoke (catches the member-expression export bug).
   const esmSmoke = `
     import {

@@ -66,3 +66,15 @@ describe('MemoryNonceStore', () => {
     expect(store.size).toBe(0);
   });
 });
+
+describe('MemoryNonceStore — concurrency', () => {
+  it('N concurrent consumes of the SAME nonce yield exactly one ok and N-1 replay', async () => {
+    const store = makeStore({ now: () => 1000 });
+    const N = 100;
+    const results = await Promise.all(
+      Array.from({ length: N }, () => store.consume('scope', 'same-nonce', 5000)),
+    );
+    expect(results.filter((r) => r === 'ok')).toHaveLength(1);
+    expect(results.filter((r) => r === 'replay')).toHaveLength(N - 1);
+  });
+});

@@ -63,6 +63,30 @@ describe('buildCanonicalString', () => {
     const c = buildCanonicalString({ ...POST, method: 'post' });
     expect(c.split('\n')[0]).toBe('POST');
   });
+
+  it('throws when url contains a raw LF', () => {
+    expect(() =>
+      buildCanonicalString({ ...POST, url: '/api/x\ninjected' }),
+    ).toThrow(/url must not contain CR\/LF/);
+  });
+
+  it('throws when url contains a raw CR', () => {
+    expect(() =>
+      buildCanonicalString({ ...POST, url: '/api/x\rinjected' }),
+    ).toThrow(/url must not contain CR\/LF/);
+  });
+
+  it('throws when nonce contains a raw CR/LF', () => {
+    expect(() =>
+      buildCanonicalString({ ...POST, nonce: 'nonce\nabc12345' }),
+    ).toThrow(/nonce must not contain CR\/LF/);
+  });
+
+  it('throws when method contains a raw CR/LF', () => {
+    expect(() =>
+      buildCanonicalString({ ...POST, method: 'POST\n' }),
+    ).toThrow(/method must not contain CR\/LF/);
+  });
 });
 
 describe('signRequest — golden vectors', () => {

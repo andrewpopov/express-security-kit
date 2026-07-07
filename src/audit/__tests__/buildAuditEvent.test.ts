@@ -16,9 +16,10 @@ describe('buildAuditEvent', () => {
         securityContext: { principalType: 'apiKey', principalId: 'p1', keyId: 'k1' },
       }),
       { action: 'list.delete', outcome: 'allow', correlationId: 'corr-1', meta: { n: 2 } },
-      { now: () => 1700000000000 },
+      { now: () => 1700000000000, id: () => 'fixed-id' },
     );
     expect(event).toEqual({
+      id: 'fixed-id',
       timestamp: '2023-11-14T22:13:20.000Z',
       action: 'list.delete',
       outcome: 'allow',
@@ -54,6 +55,36 @@ describe('buildAuditEvent', () => {
       { action: 'a', outcome: 'error' },
     );
     expect(event.path).toBe('/fallback');
+  });
+
+  it('defaults id to a crypto.randomUUID-shaped string', () => {
+    const event = buildAuditEvent(req({ ip: '1.1.1.1' }), { action: 'x', outcome: 'deny' });
+    expect(event.id).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    );
+  });
+
+  it('honors an injected deterministic id generator', () => {
+    const event = buildAuditEvent(
+      req({ ip: '1.1.1.1' }),
+      { action: 'x', outcome: 'deny' },
+      { id: () => 'my-fixed-id' },
+    );
+    expect(event.id).toBe('my-fixed-id');
+  });
+
+  it('omits id (rather than throwing) when the id generator throws', () => {
+    const event = buildAuditEvent(
+      req({ ip: '1.1.1.1' }),
+      { action: 'x', outcome: 'deny' },
+      {
+        id: () => {
+          throw new Error('id boom');
+        },
+      },
+    );
+    expect(event.id).toBeUndefined();
+    expect(event.action).toBe('x');
   });
 
   it('never throws on a hostile/partial request object', () => {

@@ -12,6 +12,7 @@ export type {
   RateLimiterConfig,
   RateLimitAlgorithm,
   RateLimitOverride,
+  RateLimitRejection,
   RateLimiterLogger,
 } from './rate-limit/createRateLimiter';
 

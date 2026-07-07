@@ -10,6 +10,13 @@ export interface BuildAuditEventInput {
 export interface BuildAuditEventOptions {
     /** Injectable clock (ms). Default Date.now. Converted to an ISO string. */
     now?: () => number;
+    /**
+     * Generator for the event's optional `id` field. Default
+     * `crypto.randomUUID`. Inject a deterministic generator (e.g. `() =>
+     * 'fixed-id'`) for tests that assert exact event shapes. See
+     * {@link AuditEvent.id} for the dedupe contract this enables.
+     */
+    id?: () => string;
 }
 /**
  * Normalize a request + outcome into an {@link AuditEvent}, pulling

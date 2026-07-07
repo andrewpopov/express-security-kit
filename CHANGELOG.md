@@ -17,6 +17,203 @@ CHANGELOG entry.
 
 ---
 
+## 1.0.0
+
+First stable release. **No API changes from 0.8.0** — this promotes the library to
+a stable 1.x now that three services depend on it in production:
+
+- **cairn** — helmet + api-key
+- **smarthome** — helmet + api-key + audit + rate-limit
+- **stoki** — helmet + request-signing + api-key + rate-limit
+
+The public API — helmet preset (`createHelmetMiddleware`), rate limiter
+(`createRateLimiter` with `skipSuccessful` / `buildResponseBody` /
+`overrideResolver` / memory + Redis stores), api-key (`verifyApiKey`), request
+signing (`createRequestSigningVerifier`, `signRequest`, `MemoryNonceStore`), and
+audit (`AuditBuffer`) — is considered stable. Future breaking changes will bump
+the major version.
+
+## 0.8.0
+
+### Added (rate-limit — skipSuccessful / refund)
+
+- **`RateLimiterConfig.skipSuccessful?: boolean`** (default false, opt-in,
+  non-breaking) — when true, a request that ends with a status `< 400` is
+  REFUNDED (its counted hit is decremented) so only failed requests count toward
+  the limit, mirroring express-rate-limit's `skipSuccessfulRequests` (e.g. an
+  auth limiter where only failed logins should count). Default behavior is
+  unchanged when the flag is unset.
+- **`RateLimitStore.decrement(key, windowMs?, now?)`** added to the store
+  interface. `MemoryRateLimitStore` and `RedisRateLimitStore` both implement it,
+  flooring at 0 and targeting the EXACT bucket the matching `hit` incremented
+  (the `windowMs`/`now` passed are the same values used for that `hit`). The
+  Redis path uses a conditional-DECR Lua script (never a phantom key, never
+  negative); an eval-less test double falls back to non-atomic GET-then-DECR.
+
+### Fixed (skipSuccessful refund semantics — Codex review)
+
+- The refund fires ONLY on response `finish`. A `close` without `finish` is an
+  aborted request (status not final — often still the default 200) and is NOT
+  refunded; `close` only cleans up listeners.
+- `MemoryRateLimitStore.decrement` targets the hit-time window: if the bucket
+  rolled between `hit` and refund, the original hit's count moved into
+  `previous`, so it decrements `previous` (or no-ops if the window fully
+  expired) rather than an unrelated current-window request.
+- The refund guard is per-LIMITER (a unique symbol per built limiter), so
+  tiered limiters each refund their own counted hit.
+- The two fail-open paths and the refund catch route through `safeWarn`, so a
+  throwing custom `logger` can't turn a store blip into a 500.
+
+## 0.7.0
+
+### Changed (rate-limit store — correctness hardening)
+
+- **`RateLimitStore.reset(key, windowMs?)`** — `reset` now accepts an optional
+  `windowMs`. `MemoryRateLimitStore.reset(key, windowMs)` deletes only that
+  exact window bucket; `RedisRateLimitStore.reset(key, windowMs)` deletes the
+  EXACT current+previous buckets for that window (no guessing). Omitting
+  `windowMs` keeps prior behavior (`MemoryRateLimitStore` clears every window
+  for the key; `RedisRateLimitStore` falls back to a fixed set of common
+  window-size guesses — see `RESET_WINDOW_GUESSES` in the README).
+- **`RedisRateLimitStore` bucket keys now include `windowMs`**:
+  `<keyPrefix>:<key>:<windowMs>:<windowIndex>` (previously
+  `<keyPrefix>:<key>:<windowIndex>`), matching `MemoryRateLimitStore`'s
+  per-window-length namespacing so two limiters sharing a store/key with
+  different window lengths never collide. **Breaking for live Redis DATA
+  only** — old-format buckets are simply orphaned and TTL-expire on their
+  own; no action needed.
+- **Atomic INCR+PEXPIRE via an optional `eval`** — fixes a never-expiring-key
+  leak. Previously `hit()` ran INCR then a SEPARATE PEXPIRE then GET; a crash
+  between the two left a key with NO TTL, leaking forever. `RedisLikeClient`
+  gains an OPTIONAL `eval?(script, numKeys, ...args)`. When present (real
+  ioredis always implements it), `hit()` runs ONE atomic Lua script: INCR,
+  then re-arm the TTL whenever `PTTL < 0` (covers a fresh key AND a
+  previously-leaked key — self-healing), then GET the previous bucket — one
+  round trip, atomic, so INCR+PEXPIRE can never be torn. The eval result is
+  STRICTLY parsed (array shape, finite non-negative integers); a malformed
+  result THROWS rather than silently coercing, which `createRateLimiter`
+  catches and fails OPEN on (the desired behavior for a store anomaly). When
+  the client has no `eval`, `hit()` falls back to the original 3-call path —
+  this fallback is explicitly NON-ATOMIC and does NOT fix the leak; it exists
+  only for eval-less test doubles, since real ioredis always has `eval`.
+
+### Added (rate-limit — skipSuccessful / refund)
+
+- **`RateLimiterConfig.skipSuccessful?: boolean`** (default false, opt-in,
+  non-breaking) — when true, a request that ends with a status `< 400` is
+  REFUNDED (its counted hit is decremented) so only failed requests count
+  toward the limit, mirroring express-rate-limit's `skipSuccessfulRequests`
+  (e.g. an auth limiter where only failed logins should count). The refund
+  fires once on response `finish`/`close` (both hooked so the listeners can't
+  leak if the socket dies), is guarded by a per-response symbol so it runs AT
+  MOST once, only refunds a `< 400` response, and is never applied to a rejected
+  (429) request. It never throws; a refund error is logged via the configured
+  logger. Default behavior (option unset) is unchanged.
+- **`RateLimitStore.decrement(key, windowMs?, now?)`** — new store method used
+  by the refund. `MemoryRateLimitStore` decrements the current-window counter
+  (floored at 0; no-op if the key/window is gone). `RedisRateLimitStore` does a
+  conditional-DECR of the exact window bucket via a Lua script (or a non-atomic
+  GET-then-DECR fallback for eval-less clients) that never creates a phantom key
+  or drives a counter negative. `windowMs`/`now` are optional so `decrement(key)`
+  remains valid, but `createRateLimiter` passes the same `windowMs`/`now` it used
+  for the corresponding `hit` so windowed stores target the exact bucket.
+  `RedisLikeClient` gains a `decr` method.
+
+### Added (signing hardening)
+
+- **CR/LF-injection guard in `buildCanonicalString`** — `method`, `url`, and
+  `nonce` are now rejected (`Invalid canonical field: <field> must not
+  contain CR/LF`) if they contain a raw `\n` or `\r`. Without this, a
+  CR/LF-carrying `url`/`nonce` could let two distinct request tuples
+  canonicalize to the same LF-joined string (delimiter ambiguity), risking
+  signature reuse across requests. Valid HTTP requests never carry a raw
+  CR/LF in these fields, so this only rejects malformed/hostile input — the
+  wire format for valid inputs is byte-identical (stoki compat preserved).
+- **`requireRawBody` option on `createRequestSigningVerifier`** — when `true`,
+  a body-bearing request (never GET/HEAD) that arrives without `req.rawBody`
+  FAILS CLOSED (`no_raw_body`) instead of silently hashing
+  `JSON.stringify(req.body)` (which can diverge from the client's exact
+  signed bytes). Default `false` (unchanged behavior). Only governs the
+  DEFAULT body extractor — a custom `bodySource` participates as provided.
+
+### Added (audit)
+
+- **`AuditEvent.id`** (optional) — `buildAuditEvent` now sets `id` by default
+  via `crypto.randomUUID()` (configurable via a new `id?: () => string`
+  option on `BuildAuditEventOptions` / `AuditHookOptions`, threaded through
+  `auditFailureHook` / `auditRateLimitHook` / `auditDeniedHook`). Intended for
+  DEDUPE by a durable sink, since `AuditBuffer` delivery is at-least-once —
+  make `sink.write` idempotent (e.g. upsert on `id`) if you rely on exactly-
+  once storage. Additive; existing exact-`toEqual` assertions on a built
+  event should inject a deterministic `id` (or switch to
+  `expect.objectContaining`).
+
+### Added (testing)
+
+- Property/fuzz tests (new DEV dependency: `fast-check`) covering
+  `buildCanonicalString` (no delimiter ambiguity for CR/LF-free fields; any
+  CR/LF in `method`/`url`/`nonce` throws), `timingSafeEqualHex` (never
+  throws; true iff byte-identical; false on length mismatch), and
+  `decodedJwtKey` (never throws on arbitrary header garbage).
+- Concurrency tests for `MemoryRateLimitStore` (N parallel hits, no lost
+  updates; drop-oldest eviction stays bounded under a key flood),
+  `MemoryNonceStore` (N concurrent consumes of the same nonce yield exactly
+  one `'ok'`), and `AuditBuffer` (sustained `record()` against a slow sink
+  respects `maxQueueSize` and never runs two flushes concurrently).
+- A real-Redis integration test suite for `RedisRateLimitStore`
+  (`redis-store.integration.test.ts`), skipped locally/in the normal `test`
+  job unless `ESK_REDIS_URL` is set; a new non-required `redis-integration`
+  CI job runs it against a `services: redis` container.
+
+### Docs
+
+- README: removed the stale "Phase 1" intro (API-key/HMAC/audit are
+  documented, not future work), fixed the install pin (`#v0.1.0` →
+  `#v0.7.0`), removed a duplicated "Fail direction differs by layer"
+  blockquote, added a `verifyApiKey` mention to the module list, and
+  updated the Redis store section for the `windowMs`-scoped bucket keys and
+  atomic-`eval` hit path.
+- Added `SECURITY.md` (per-pillar threat model, fail-open/fail-closed
+  matrix, replay-window semantics, vulnerability reporting) and
+  `docs/MIGRATING.md` (hand-rolled → kit mapping, `rawBody`/`trust proxy`
+  gotchas).
+
+### CI
+
+- `test` job gains a dist-freshness check (`npm run build && git diff
+  --exit-code dist`) so a stale committed `dist/` fails CI.
+- New non-required `compat` job (Node 22) + `ci-success` aggregate gate
+  (mirrors the deploy-kit CI pattern) so `test` stays a stable required
+  status-check name.
+- New non-required `redis-integration` job (Redis service container) runs
+  the real-Redis integration suite.
+
+## 0.6.0
+
+### Added
+
+- **Custom rate-limit 429 response body** (non-breaking). `createRateLimiter`
+  config gains two options so a service can match its own API error envelope:
+  - `message?: string` — overrides ONLY the message text inside the default
+    envelope (`{ error: { code: 'RATE_LIMITED', message, retryAfter } }`); the
+    shape and code are unchanged.
+  - `buildResponseBody?: (info: RateLimitRejection) => unknown` — returns the
+    ENTIRE JSON body, replacing the default envelope (e.g. smarthome's
+    `{ error: '<string>' }`). `RateLimitRejection` (`{ limit, remaining, resetAt,
+    retryAfterSeconds, key, req }`) is exported. A throwing formatter can never
+    break the response — it falls back to the default body (honoring `message`)
+    and logs via the configured logger; status stays 429 and headers are still
+    emitted.
+  - A custom body is validated before it is sent: a nullish return, a thenable
+    (async formatters are rejected — the body is resolved synchronously), or a
+    non-JSON-serializable value (circular / `BigInt`, which would make
+    `res.json` throw into Express's error path) all fall back to the default
+    body + log, so a custom formatter can never break the 429. Logging itself is
+    guarded so a throwing logger cannot suppress the fallback body.
+  - Precedence: `buildResponseBody` > `message` > default. When neither is set
+    the 429 body is **byte-unchanged**, so existing adopters (e.g. cairn) are
+    unaffected.
+
 ## 0.5.0
 
 ### Added

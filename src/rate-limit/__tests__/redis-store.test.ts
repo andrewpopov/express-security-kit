@@ -21,6 +21,11 @@ class FakeRedis implements RedisLikeClient {
     this.data.set(key, next);
     return next;
   }
+  async decr(key: string): Promise<number> {
+    const next = (this.data.get(key) ?? 0) - 1;
+    this.data.set(key, next);
+    return next;
+  }
   async pexpire(key: string, ms: number): Promise<number> {
     this.pexpireCalls.push({ key, ms });
     this.ttlArmed.add(key);
@@ -39,13 +44,25 @@ class FakeRedis implements RedisLikeClient {
     return n;
   }
 
-  /** Interprets the store's HIT_SCRIPT: INCR KEYS[1]; arm TTL if unset; GET KEYS[2]. */
+  /**
+   * Interprets the store's scripts. HIT_SCRIPT: INCR KEYS[1]; arm TTL if unset;
+   * GET KEYS[2]. DECREMENT_SCRIPT: conditional DECR KEYS[1] iff present and > 0.
+   */
   async eval(
     script: string,
     numKeys: number,
     ...args: (string | number)[]
   ): Promise<unknown> {
     this.evalCalls.push({ script, numKeys, args });
+    if (script.includes('DECR')) {
+      const [bucketKey] = args as [string];
+      const v = this.data.get(bucketKey);
+      if (v !== undefined && v > 0) {
+        this.data.set(bucketKey, v - 1);
+        return v - 1;
+      }
+      return v ?? 0;
+    }
     const [currentKey, previousKey, ttlArg] = args as [string, string, string];
     const current = (this.data.get(currentKey) ?? 0) + 1;
     this.data.set(currentKey, current);
@@ -81,6 +98,11 @@ class NoEvalFakeRedis implements RedisLikeClient {
 
   async incr(key: string): Promise<number> {
     const next = (this.data.get(key) ?? 0) + 1;
+    this.data.set(key, next);
+    return next;
+  }
+  async decr(key: string): Promise<number> {
+    const next = (this.data.get(key) ?? 0) - 1;
     this.data.set(key, next);
     return next;
   }
@@ -256,6 +278,55 @@ describe('RedisRateLimitStore — reset', () => {
     const store = new RedisRateLimitStore(redis, { keyPrefix: 'myapp' });
     await store.hit('k', 1000, 5000);
     expect(redis.pexpireCalls[0].key.startsWith('myapp:k:')).toBe(true);
+  });
+});
+
+describe('RedisRateLimitStore — decrement', () => {
+  it('refunds the exact current-window bucket (atomic eval path)', async () => {
+    const redis = new FakeRedis();
+    const store = new RedisRateLimitStore(redis);
+    await store.hit('k', 1000, 5000); // current = 1
+    await store.hit('k', 1000, 5000); // current = 2
+    await store.decrement('k', 1000, 5000);
+    const after = await store.hit('k', 1000, 5000); // 2 - 1 + 1
+    expect(after.current).toBe(2);
+  });
+
+  it('floors at 0: never creates a phantom key or goes negative (eval path)', async () => {
+    const redis = new FakeRedis();
+    const store = new RedisRateLimitStore(redis);
+    // Decrement a bucket that was never hit → no-op (no phantom -1).
+    await store.decrement('missing', 1000, 5000);
+    const after = await store.hit('missing', 1000, 5000);
+    expect(after.current).toBe(1); // fresh, not 0-from-a-phantom
+  });
+
+  it('floors at 0 across repeated decrements (eval path)', async () => {
+    const redis = new FakeRedis();
+    const store = new RedisRateLimitStore(redis);
+    await store.hit('k', 1000, 5000); // current = 1
+    await store.decrement('k', 1000, 5000);
+    await store.decrement('k', 1000, 5000); // already 0 → no-op
+    const after = await store.hit('k', 1000, 5000);
+    expect(after.current).toBe(1);
+  });
+
+  it('refunds via the non-atomic fallback when the client has no eval', async () => {
+    const redis = new NoEvalFakeRedis();
+    const store = new RedisRateLimitStore(redis);
+    await store.hit('k', 1000, 5000);
+    await store.hit('k', 1000, 5000); // current = 2
+    await store.decrement('k', 1000, 5000);
+    const after = await store.hit('k', 1000, 5000); // 2 - 1 + 1
+    expect(after.current).toBe(2);
+  });
+
+  it('fallback does not DECR a missing/zero key (no negative)', async () => {
+    const redis = new NoEvalFakeRedis();
+    const store = new RedisRateLimitStore(redis);
+    await store.decrement('missing', 1000, 5000); // no-op
+    const after = await store.hit('missing', 1000, 5000);
+    expect(after.current).toBe(1);
   });
 });
 

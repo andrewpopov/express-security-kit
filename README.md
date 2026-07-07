@@ -289,6 +289,31 @@ A throwing `buildResponseBody` falls back to the default body (logged) — it ca
 never crash the middleware. Precedence: `buildResponseBody` > `message` >
 default. Omit both and the body is byte-identical to prior versions.
 
+### Recipe: only count failed attempts (`skipSuccessful`)
+
+For an auth limiter that should only count FAILED logins (so a burst of valid
+requests isn't throttled), set `skipSuccessful: true`. A request that ends with
+a status `< 400` is refunded — mirroring express-rate-limit's
+`skipSuccessfulRequests`:
+
+```ts
+const authLimiter = createRateLimiter({
+  windowMs: 15 * 60_000,
+  max: 10,                 // only 10 FAILED attempts / 15m
+  keyGenerator: ipKey,
+  skipSuccessful: true,    // 2xx/3xx responses are refunded, don't count
+});
+
+app.post('/api/auth/login', authLimiter, loginHandler);
+```
+
+The refund fires once when the response `finish`es with a `< 400` status. A
+`close` without `finish` is an aborted request (its status isn't final — often
+still the default 200) and is NOT refunded. The guard is per-limiter, so tiered
+limiters each refund their own hit; a rejected (429) request is never refunded.
+It uses the store's `decrement` (both built-in stores implement it) and never
+throws.
+
 ## Module 3 — API-key auth
 
 `createApiKeyAuth(config)` verifies a presented key and populates

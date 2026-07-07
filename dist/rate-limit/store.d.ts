@@ -27,6 +27,18 @@ export interface RateLimitStore {
      * tracked for the key (implementation-defined scope; see each store's docs).
      */
     reset(key: string, windowMs?: number): Promise<void>;
+    /**
+     * Refund a previously-counted hit by decrementing `key`'s current-window
+     * counter, flooring at 0. Used by `skipSuccessful` to not count requests that
+     * ended successfully. MUST be total/non-throwing and a no-op if the key/window
+     * is already gone.
+     *
+     * `windowMs`/`now` are OPTIONAL — a caller may invoke `decrement(key)` — but
+     * when supplied (as `createRateLimiter` does, passing the SAME values it used
+     * for the corresponding `hit`) they let a windowed store target the EXACT
+     * bucket that was incremented rather than guessing.
+     */
+    decrement(key: string, windowMs?: number, now?: number): void | Promise<void>;
     /** Release resources (timers, connections). Safe to call more than once. */
     dispose?(): void;
 }
@@ -62,6 +74,17 @@ export declare class MemoryRateLimitStore implements RateLimitStore {
      */
     private rollWindow;
     reset(key: string, windowMs?: number): Promise<void>;
+    /**
+     * Refund a hit, floored at 0. With `windowMs`/`now` (the SAME values used for
+     * the matching `hit`), targets the EXACT sub-counter the hit landed in: the
+     * hit incremented the window containing `now`, but by refund time the bucket
+     * may have rolled, moving that count into `previous` (exactly one roll) or
+     * expiring it (a larger gap). Decrementing `bucket.current` unconditionally
+     * would refund an unrelated later request and leave the real hit counted.
+     * Without `windowMs`/`now` it best-effort decrements current bucket(s). No-op
+     * if the key/window is gone. Never throws.
+     */
+    decrement(key: string, windowMs?: number, now?: number): void;
     private evictIfNeeded;
     private cleanup;
     /** Clear the cleanup timer. Alias of dispose() for ergonomic test teardown. */

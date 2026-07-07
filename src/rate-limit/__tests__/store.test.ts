@@ -69,6 +69,59 @@ describe('MemoryRateLimitStore', () => {
     expect(after.current).toBe(1);
   });
 
+  it('decrement refunds the current-window counter', async () => {
+    const store = makeStore();
+    await store.hit('k', 1000, 5000); // current = 1
+    await store.hit('k', 1000, 5000); // current = 2
+    store.decrement('k', 1000);
+    const after = await store.hit('k', 1000, 5000); // 2 - 1 = 1, then +1 = 2
+    expect(after.current).toBe(2);
+  });
+
+  it('decrement floors at 0 and never goes negative', async () => {
+    const store = makeStore();
+    await store.hit('k', 1000, 5000); // current = 1
+    store.decrement('k', 1000);
+    store.decrement('k', 1000); // already 0 → no-op
+    store.decrement('k', 1000);
+    const after = await store.hit('k', 1000, 5000); // 0, then +1
+    expect(after.current).toBe(1);
+  });
+
+  it('decrement is a no-op on a missing key/window', async () => {
+    const store = makeStore();
+    expect(() => store.decrement('never-seen', 1000)).not.toThrow();
+    expect(() => store.decrement('never-seen')).not.toThrow();
+    // A different windowMs than any tracked bucket is also a no-op.
+    await store.hit('k', 1000, 5000);
+    store.decrement('k', 60_000); // wrong window → no bucket → no-op
+    const after = await store.hit('k', 1000, 5000);
+    expect(after.current).toBe(2);
+  });
+
+  it('decrement without windowMs decrements the live bucket(s) for the key', async () => {
+    const store = makeStore();
+    await store.hit('k', 1000, 5000);
+    await store.hit('k', 1000, 5000); // current = 2
+    store.decrement('k'); // no windowMs → prefix scan
+    const after = await store.hit('k', 1000, 5000);
+    expect(after.current).toBe(2); // 2 - 1 + 1
+  });
+
+  it('decrement(key, windowMs, now) refunds the hit-time window after a roll', async () => {
+    // A hit lands in window N; before its refund fires, a later hit rolls the
+    // bucket to N+1, moving N's count into `previous`. The refund (carrying the
+    // ORIGINAL hit-time `now`) must decrement `previous`, NOT the unrelated
+    // current-window request — otherwise it double-counts and never refunds N.
+    const store = makeStore();
+    await store.hit('k', 5000, 10_000); // window N [10000,15000): current = 1
+    await store.hit('k', 5000, 16_000); // rolls to N+1: previous = 1, current = 1
+    store.decrement('k', 5000, 10_000); // refund the FIRST hit (its window is N)
+    const after = await store.hit('k', 5000, 16_000); // same window N+1, current += 1
+    expect(after.previous).toBe(0); // N's count was refunded out of `previous`
+    expect(after.current).toBe(2); // the two N+1 hits are untouched
+  });
+
   it('evicts oldest keys past MAX_TRACKED_KEYS', async () => {
     const store = makeStore({ maxTrackedKeys: 3 });
     await store.hit('a', 1000, 1000);

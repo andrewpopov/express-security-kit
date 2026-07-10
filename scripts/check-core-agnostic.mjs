@@ -16,9 +16,14 @@ import { join, relative } from 'node:path';
 const pkgRoot = new URL('..', import.meta.url).pathname;
 const coreRoot = join(pkgRoot, 'src', 'core');
 
-// Matches: from 'express', from "express/foo", require('express'),
-// require("fastify/bar") — with or without `import type`.
-const FORBIDDEN_IMPORT = /(?:from\s+|require\()\s*['"](express|fastify)(?:\/[^'"]*)?['"]/g;
+// Matches every static import form that pulls the framework into the module
+// graph: `from 'express'`, `require('express')` (incl. `import x = require(...)`),
+// dynamic `import('express')`, and a bare side-effect `import 'express'` — with
+// or without `import type`, and with or without a subpath. Computed specifiers
+// (`await import(varHoldingName)`) cannot be regex-detected; the guard's
+// guarantee is explicitly limited to literal string specifiers.
+const FORBIDDEN_IMPORT =
+  /(?:\bfrom\s+|\brequire\s*\(\s*|\bimport\s*\(\s*|\bimport\s+)['"](express|fastify)(?:\/[^'"]*)?['"]/g;
 
 function isTestFile(path) {
   return path.includes(`${join('__tests__')}${'/'}`) || /\.test\.ts$/.test(path);

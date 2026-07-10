@@ -1,10 +1,16 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.auditDeniedHook = exports.auditRateLimitHook = exports.auditFailureHook = exports.ConsoleAuditSink = exports.buildAuditEvent = exports.AuditBuffer = exports.MemoryNonceStore = exports.createRequestSigningVerifier = exports.sha256Hex = exports.signRequest = exports.buildCanonicalString = exports.requireScope = exports.timingSafeEqualHex = exports.scopedHmacHasher = exports.sha256Hasher = exports.verifyApiKey = exports.createApiKeyAuth = exports.decodedJwtKey = exports.verifiedIdentityKey = exports.ipKey = exports.defaultKeyGenerator = exports.MemoryRateLimitStore = exports.createRateLimiter = exports.createHelmetMiddleware = void 0;
+exports.auditDeniedHook = exports.auditRateLimitHook = exports.auditFailureHook = exports.buildAuditEvent = exports.ConsoleAuditSink = exports.AuditBuffer = exports.MemoryNonceStore = exports.createRequestSigningVerifier = exports.sha256Hex = exports.signRequest = exports.buildCanonicalString = exports.requireScope = exports.timingSafeEqualHex = exports.scopedHmacHasher = exports.sha256Hasher = exports.verifyApiKey = exports.createApiKeyAuth = exports.decodedJwtKey = exports.defaultKeyGenerator = exports.verifiedIdentityKey = exports.ipKey = exports.MemoryRateLimitStore = exports.createRateLimiter = exports.createHelmetMiddleware = void 0;
 // Side-effect import: merges the `securityContext`/`rawBody` fields onto the
 // ambient `Express.Request` type. MUST be a value import (not `import type`)
 // so the augmentation is actually loaded by root consumers.
 require("./express/augmentation");
+// Root re-exports pin the request type to express `Request` so the PUBLIC
+// signatures — including type-level introspection via `Parameters<>` /
+// `ReturnType<>` — match v1.0.0 exactly. The `./core` subpath keeps the generic
+// `<Req extends SecurityRequest = SecurityRequest>` forms for framework-agnostic
+// consumers. Values are re-exported through a pinned-type `const` binding, so the
+// underlying function identity (and thus behavior) is unchanged.
 // Shorthand re-exports (no renaming) so cjs-module-lexer statically detects the
 // named exports for ESM consumers of the CommonJS build.
 var createHelmetMiddleware_1 = require("./express/helmet/createHelmetMiddleware");
@@ -13,15 +19,17 @@ var createRateLimiter_1 = require("./express/rate-limit/createRateLimiter");
 Object.defineProperty(exports, "createRateLimiter", { enumerable: true, get: function () { return createRateLimiter_1.createRateLimiter; } });
 var store_1 = require("./core/rate-limit/store");
 Object.defineProperty(exports, "MemoryRateLimitStore", { enumerable: true, get: function () { return store_1.MemoryRateLimitStore; } });
-var keyGenerator_1 = require("./core/rate-limit/keyGenerator");
-Object.defineProperty(exports, "defaultKeyGenerator", { enumerable: true, get: function () { return keyGenerator_1.defaultKeyGenerator; } });
-Object.defineProperty(exports, "ipKey", { enumerable: true, get: function () { return keyGenerator_1.ipKey; } });
-Object.defineProperty(exports, "verifiedIdentityKey", { enumerable: true, get: function () { return keyGenerator_1.verifiedIdentityKey; } });
-Object.defineProperty(exports, "decodedJwtKey", { enumerable: true, get: function () { return keyGenerator_1.decodedJwtKey; } });
+// Key generators: pinned to express `Request` at the root (generic in ./core).
+const keyGenerator_1 = require("./core/rate-limit/keyGenerator");
+exports.ipKey = keyGenerator_1.ipKey;
+exports.verifiedIdentityKey = keyGenerator_1.verifiedIdentityKey;
+exports.defaultKeyGenerator = keyGenerator_1.defaultKeyGenerator;
+exports.decodedJwtKey = keyGenerator_1.decodedJwtKey;
 var createApiKeyAuth_1 = require("./express/api-key/createApiKeyAuth");
 Object.defineProperty(exports, "createApiKeyAuth", { enumerable: true, get: function () { return createApiKeyAuth_1.createApiKeyAuth; } });
-var verifyApiKey_1 = require("./core/api-key/verifyApiKey");
-Object.defineProperty(exports, "verifyApiKey", { enumerable: true, get: function () { return verifyApiKey_1.verifyApiKey; } });
+// verifyApiKey: pinned to `(config, req: Request)` — the v1.0.0 signature.
+const verifyApiKey_1 = require("./core/api-key/verifyApiKey");
+exports.verifyApiKey = verifyApiKey_1.verifyApiKey;
 var hashers_1 = require("./core/api-key/hashers");
 Object.defineProperty(exports, "sha256Hasher", { enumerable: true, get: function () { return hashers_1.sha256Hasher; } });
 Object.defineProperty(exports, "scopedHmacHasher", { enumerable: true, get: function () { return hashers_1.scopedHmacHasher; } });
@@ -38,14 +46,15 @@ var nonceStore_1 = require("./core/signing/nonceStore");
 Object.defineProperty(exports, "MemoryNonceStore", { enumerable: true, get: function () { return nonceStore_1.MemoryNonceStore; } });
 var AuditBuffer_1 = require("./core/audit/AuditBuffer");
 Object.defineProperty(exports, "AuditBuffer", { enumerable: true, get: function () { return AuditBuffer_1.AuditBuffer; } });
-var buildAuditEvent_1 = require("./core/audit/buildAuditEvent");
-Object.defineProperty(exports, "buildAuditEvent", { enumerable: true, get: function () { return buildAuditEvent_1.buildAuditEvent; } });
 var ConsoleAuditSink_1 = require("./core/audit/ConsoleAuditSink");
 Object.defineProperty(exports, "ConsoleAuditSink", { enumerable: true, get: function () { return ConsoleAuditSink_1.ConsoleAuditSink; } });
-var hooks_1 = require("./core/audit/hooks");
-Object.defineProperty(exports, "auditFailureHook", { enumerable: true, get: function () { return hooks_1.auditFailureHook; } });
-Object.defineProperty(exports, "auditRateLimitHook", { enumerable: true, get: function () { return hooks_1.auditRateLimitHook; } });
-Object.defineProperty(exports, "auditDeniedHook", { enumerable: true, get: function () { return hooks_1.auditDeniedHook; } });
+// buildAuditEvent + audit hooks: pinned to express `Request` at the root.
+const buildAuditEvent_1 = require("./core/audit/buildAuditEvent");
+exports.buildAuditEvent = buildAuditEvent_1.buildAuditEvent;
+const hooks_1 = require("./core/audit/hooks");
+exports.auditFailureHook = hooks_1.auditFailureHook;
+exports.auditRateLimitHook = hooks_1.auditRateLimitHook;
+exports.auditDeniedHook = hooks_1.auditDeniedHook;
 // Note: the Redis store is intentionally NOT exported here. Import it from the
 // '@andrewpopov/express-security-kit/redis-store' subpath so the core entry
 // never references ioredis.

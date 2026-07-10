@@ -3,6 +3,15 @@
 // so the augmentation is actually loaded by root consumers.
 import './express/augmentation';
 
+import type { Request } from 'express';
+
+// Root re-exports pin the request type to express `Request` so the PUBLIC
+// signatures — including type-level introspection via `Parameters<>` /
+// `ReturnType<>` — match v1.0.0 exactly. The `./core` subpath keeps the generic
+// `<Req extends SecurityRequest = SecurityRequest>` forms for framework-agnostic
+// consumers. Values are re-exported through a pinned-type `const` binding, so the
+// underlying function identity (and thus behavior) is unchanged.
+
 // Shorthand re-exports (no renaming) so cjs-module-lexer statically detects the
 // named exports for ESM consumers of the CommonJS build.
 
@@ -29,23 +38,40 @@ export type {
   MemoryRateLimitStoreOptions,
 } from './core/rate-limit/store';
 
-export {
-  defaultKeyGenerator,
-  ipKey,
-  verifiedIdentityKey,
-  decodedJwtKey,
+// Key generators: pinned to express `Request` at the root (generic in ./core).
+import {
+  defaultKeyGenerator as defaultKeyGeneratorCore,
+  ipKey as ipKeyCore,
+  verifiedIdentityKey as verifiedIdentityKeyCore,
+  decodedJwtKey as decodedJwtKeyCore,
 } from './core/rate-limit/keyGenerator';
-import type { Request } from 'express';
-import type { DecodedJwtKeyOptionsCore } from './core/rate-limit/keyGenerator';
+import type {
+  KeyGeneratorCore,
+  DecodedJwtKeyOptionsCore,
+} from './core/rate-limit/keyGenerator';
 /** Express-pinned alias: same shape as the pre-carve `DecodedJwtKeyOptions`. */
 export type DecodedJwtKeyOptions = DecodedJwtKeyOptionsCore<Request>;
+export const ipKey: KeyGeneratorCore<Request> = ipKeyCore;
+export const verifiedIdentityKey: KeyGeneratorCore<Request> = verifiedIdentityKeyCore;
+export const defaultKeyGenerator: KeyGeneratorCore<Request> = defaultKeyGeneratorCore;
+export const decodedJwtKey: (opts?: DecodedJwtKeyOptions) => KeyGeneratorCore<Request> =
+  decodedJwtKeyCore;
 
 export type { SecurityContext } from './core/context';
 
 export { createApiKeyAuth } from './express/api-key/createApiKeyAuth';
-export type { ApiKeyAuthConfig } from './express/api-key/createApiKeyAuth';
-export { verifyApiKey } from './core/api-key/verifyApiKey';
-export type { ApiKeyVerifyOutcome } from './core/api-key/verifyApiKey';
+import type { ApiKeyAuthConfig } from './express/api-key/createApiKeyAuth';
+export type { ApiKeyAuthConfig };
+
+// verifyApiKey: pinned to `(config, req: Request)` — the v1.0.0 signature.
+import { verifyApiKey as verifyApiKeyCore } from './core/api-key/verifyApiKey';
+import type { ApiKeyVerifyOutcome } from './core/api-key/verifyApiKey';
+export type { ApiKeyVerifyOutcome };
+export const verifyApiKey: (
+  config: ApiKeyAuthConfig,
+  req: Request,
+) => Promise<ApiKeyVerifyOutcome> = verifyApiKeyCore;
+
 export {
   sha256Hasher,
   scopedHmacHasher,
@@ -90,24 +116,55 @@ export type {
 } from './core/signing/nonceStore';
 
 export { AuditBuffer } from './core/audit/AuditBuffer';
-export { buildAuditEvent } from './core/audit/buildAuditEvent';
+import { AuditBuffer as AuditBufferClass } from './core/audit/AuditBuffer';
 export { ConsoleAuditSink } from './core/audit/ConsoleAuditSink';
-export {
-  auditFailureHook,
-  auditRateLimitHook,
-  auditDeniedHook,
-} from './core/audit/hooks';
 export type {
   AuditEvent,
   AuditSink,
   AuditBufferConfig,
   AuditLogger,
 } from './core/audit/types';
+import type { AuditEvent } from './core/audit/types';
+
+// buildAuditEvent + audit hooks: pinned to express `Request` at the root.
+import { buildAuditEvent as buildAuditEventCore } from './core/audit/buildAuditEvent';
+import type {
+  BuildAuditEventInput,
+  BuildAuditEventOptions,
+} from './core/audit/buildAuditEvent';
 export type {
   BuildAuditEventInput,
   BuildAuditEventOptions,
 } from './core/audit/buildAuditEvent';
+export const buildAuditEvent: (
+  req: Request,
+  input: BuildAuditEventInput,
+  options?: BuildAuditEventOptions,
+) => AuditEvent = buildAuditEventCore;
+
+import {
+  auditFailureHook as auditFailureHookCore,
+  auditRateLimitHook as auditRateLimitHookCore,
+  auditDeniedHook as auditDeniedHookCore,
+} from './core/audit/hooks';
+import type { AuditHookOptions } from './core/audit/hooks';
 export type { AuditHookOptions } from './core/audit/hooks';
+export const auditFailureHook: (
+  buffer: AuditBufferClass,
+  action: string,
+  outcome?: AuditEvent['outcome'],
+  options?: AuditHookOptions,
+) => (req: Request, reason: string) => void = auditFailureHookCore;
+export const auditRateLimitHook: (
+  buffer: AuditBufferClass,
+  action: string,
+  options?: AuditHookOptions,
+) => (req: Request, key: string) => void = auditRateLimitHookCore;
+export const auditDeniedHook: (
+  buffer: AuditBufferClass,
+  action: string,
+  options?: AuditHookOptions,
+) => (req: Request) => void = auditDeniedHookCore;
 export type { ConsoleAuditSinkLogger } from './core/audit/ConsoleAuditSink';
 
 // Note: the Redis store is intentionally NOT exported here. Import it from the

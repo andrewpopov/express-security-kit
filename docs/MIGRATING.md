@@ -9,7 +9,7 @@ gotchas that bite almost everyone on the first pass.
 |---|---|
 | `express-rate-limit` (or a custom counter) | `createRateLimiter({ windowMs, max, keyGenerator, store })` — supports fixed/sliding algorithms, tiered configs, and a pluggable store (`MemoryRateLimitStore` / `RedisRateLimitStore`). |
 | Ad-hoc `x-api-key` header check | `createApiKeyAuth({ prefix, hasher, lookup })` (middleware, fails closed) or `verifyApiKey(config, req)` (verify-only primitive) if you need to fall through to another auth method. |
-| Bespoke HMAC request signing | `signRequest(...)` (client-side helper) + `createRequestSigningVerifier({ secret, nonceStore })` (server-side, replay-protected). Byte-for-byte compatible with stoki's existing scheme. |
+| Bespoke HMAC request signing | `signRequest(...)` (client-side helper) + `createRequestSigningVerifier({ secret, nonceStore })` (server-side, replay-protected). The canonical scheme is documented in the README, so an existing hand-rolled scheme can be matched byte-for-byte. |
 | Scattered `console.log`/custom audit calls | `AuditBuffer` + `auditFailureHook` / `auditRateLimitHook` / `auditDeniedHook`, wired into each pillar's `onFailure`/`onLimit`/`onDenied`. |
 | Manual `helmet()` config | `createHelmetMiddleware(config?)` — strict CSP base, widen only what you need. |
 

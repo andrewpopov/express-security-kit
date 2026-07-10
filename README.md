@@ -1,7 +1,8 @@
 # @andrewpopov/express-security-kit
 
-A dependency-light Express security library. It owns the **machinery**;
-consuming services inject all **policy**. It ships five modules: a hardened
+A dependency-light security library for Express apps: the kit owns the
+**machinery**; your service injects all **policy** (secrets, persistence,
+predicates). It ships five modules: a hardened
 **helmet preset**, a **rate limiter**, **API-key auth** (`createApiKeyAuth` /
 `verifyApiKey`), **HMAC request signing + replay protection**, and **buffered
 audit logging** — plus a shared `SecurityContext` type.
@@ -78,15 +79,15 @@ Extra `csp.*` arrays are **merged into** (never replace) the base. Use
 `overrides` (raw `HelmetOptions`, deep-merged last) when you must replace a whole
 directive.
 
-### Recipe: stoki (no external hosts)
+### Recipe: no external hosts (strict default)
 
 ```ts
 import { createHelmetMiddleware } from '@andrewpopov/express-security-kit';
 
-app.use(createHelmetMiddleware()); // strict base is exactly what stoki wants
+app.use(createHelmetMiddleware()); // the strict base needs no widening
 ```
 
-### Recipe: smarthome (Redoc docs)
+### Recipe: hosted API docs (Redoc)
 
 ```ts
 app.use(
@@ -100,7 +101,7 @@ app.use(
 );
 ```
 
-### Recipe: cairn (Google OAuth + Fonts)
+### Recipe: Google OAuth + Google Fonts
 
 ```ts
 app.use(
@@ -166,7 +167,7 @@ Keying is a composable toolkit, not a single hardcoded default:
 
 ### Recommended layered pattern (the mature default)
 
-Two tiers — this is what we distribute to all services:
+Two tiers — a sensible default for most services:
 
 ```ts
 import { createRateLimiter, ipKey, verifiedIdentityKey } from '@andrewpopov/express-security-kit';
@@ -196,9 +197,9 @@ app.use(
 If a service must key *before* auth runs, swap Tier 2's `keyGenerator` for
 `decodedJwtKey()` — still behind Tier 1.
 
-### Recipe: stoki (dual-tier per-key + per-IP for bot routes)
+### Recipe: dual-tier per-key + per-IP for integration/bot routes
 
-stoki's integration routes limit per API key AND per IP simultaneously. Express
+To limit integration routes per API key AND per IP simultaneously, express
 this as a single dual-tier limiter (first to exceed wins):
 
 ```ts
@@ -226,7 +227,7 @@ app.use('/api/integrations', integrationLimiter);
 
 Give each tier its **own store** so their counters don't collide.
 
-### Recipe: smarthome (role-aware, Redis-backed)
+### Recipe: role-aware limits, Redis-backed
 
 ```ts
 import Redis from 'ioredis';
@@ -247,7 +248,7 @@ app.use(
 );
 ```
 
-### Recipe: cairn (per-IP auth + api limiters)
+### Recipe: separate per-IP auth + API limiters
 
 ```ts
 const authLimiter = createRateLimiter({
@@ -268,11 +269,11 @@ app.use('/api', apiLimiter);
 ### Recipe: matching your own error envelope (`message` / `buildResponseBody`)
 
 The default 429 body is `{ error: { code: 'RATE_LIMITED', message, retryAfter } }`.
-To match a different app-wide envelope (e.g. smarthome's `{ error: '<string>' }`),
+To match a different app-wide envelope (e.g. a flat `{ error: '<string>' }`),
 pass `buildResponseBody`; to just reword the default, pass `message`:
 
 ```ts
-// smarthome: whole-body override to match its { error: string } shape
+// whole-body override to match a flat { error: string } shape
 createRateLimiter({
   windowMs: 60_000,
   max: 100,
@@ -350,7 +351,7 @@ the client.
 - **`requireScope` predicates must be synchronous.** Only a literal `true`
   proceeds; a returned Promise is treated as misuse and denies (403).
 
-### Recipe: cairn (`cairn_` + sha256 + bot-user)
+### Recipe: sha256-hashed keys + bot-user context
 
 ```ts
 import { createApiKeyAuth, sha256Hasher } from '@andrewpopov/express-security-kit';
@@ -358,7 +359,7 @@ import { createApiKeyAuth, sha256Hasher } from '@andrewpopov/express-security-ki
 app.use(
   '/api/bot',
   createApiKeyAuth({
-    prefix: 'cairn_',
+    prefix: 'app_',
     hasher: sha256Hasher(), // default; shown for clarity
     lookup: (hash) => db.apiKey.findByHash(hash), // returns ApiKeyRecord | null
     // Mint a first-class bot USER context instead of a bare apiKey principal.
@@ -376,7 +377,7 @@ app.use(
 );
 ```
 
-### Recipe: smarthome (`smh_` + scopedHmac + static bootstrap)
+### Recipe: scoped-HMAC hasher + static bootstrap key
 
 ```ts
 import { createApiKeyAuth, scopedHmacHasher } from '@andrewpopov/express-security-kit';
@@ -384,29 +385,29 @@ import { createApiKeyAuth, scopedHmacHasher } from '@andrewpopov/express-securit
 app.use(
   '/api',
   createApiKeyAuth({
-    prefix: 'smh_',
-    // EXACT reproduction of smarthome's existing stored-key format:
+    prefix: 'svc_',
+    // Reproduce an existing HMAC-scoped stored-key format:
     hasher: scopedHmacHasher(process.env.KEY_SECRET!, 'integrations'),
     lookup: (hash) => keyStore.find(hash),
     // A CI/bootstrap key kept in an env var, authenticated as a service:
     staticKeys: [
-      { name: 'bootstrap', value: process.env.SMH_BOOTSTRAP_KEY!, principalId: 'svc:bootstrap' },
+      { name: 'bootstrap', value: process.env.BOOTSTRAP_API_KEY!, principalId: 'svc:bootstrap' },
     ],
   }),
 );
 ```
 
-### Recipe: stoki (`ssk_ak_` + sha256 + scopes gate)
+### Recipe: scopes gate with `requireScope`
 
 ```ts
 import { createApiKeyAuth, requireScope } from '@andrewpopov/express-security-kit';
 
 app.use('/api/integrations', createApiKeyAuth({
-  prefix: 'ssk_ak_',
+  prefix: 'ak_',
   lookup: (hash) => keys.byHash(hash), // record.scopes = { allowedActions: [...] }
 }));
 
-// requireScope ships only the MECHANISM; the predicate is stoki's policy.
+// requireScope ships only the MECHANISM; the predicate is your policy.
 const canWrite = requireScope((ctx) => {
   const actions = (ctx?.scopes as { allowedActions?: string[] } | undefined)?.allowedActions;
   return Array.isArray(actions) && actions.includes('write');
@@ -422,14 +423,14 @@ by a downstream `createRateLimiter`.
 ### Unified / multi-method auth (`verifyApiKey`)
 
 If a service authenticates requests by trying an API key FIRST and falling back
-to JWT (cairn, likely stoki), use the verify-only primitive `verifyApiKey` — it
+to JWT, use the verify-only primitive `verifyApiKey` — it
 returns a decision instead of sending a response, keeping the kit out of your
 response handling and your JWT path:
 
 ```ts
 import { verifyApiKey } from '@andrewpopov/express-security-kit';
 
-const apiKeyConfig = { prefix: 'cairn_', headerName: 'x-api-key', lookup };
+const apiKeyConfig = { prefix: 'app_', headerName: 'x-api-key', lookup };
 
 app.use(async (req, res, next) => {
   const outcome = await verifyApiKey(apiKeyConfig, req);
@@ -461,8 +462,9 @@ so you can read fields your `lookup` stashed (including `record.meta`).
 **Opt-in.** For high-value machine-to-machine routes you can require that each
 request be HMAC-signed and single-use. `createRequestSigningVerifier(config)`
 verifies the signature and consumes the nonce; `signRequest(...)` is the
-client-side helper that produces compatible headers. The scheme is byte-for-byte
-compatible with stoki's existing signed clients.
+client-side helper that produces compatible headers. The canonical scheme is
+documented below, so existing hand-rolled signed clients can be matched
+byte-for-byte.
 
 ### The scheme
 
@@ -620,7 +622,7 @@ app.use(createRateLimiter({
 }));
 
 app.use(createApiKeyAuth({
-  prefix: 'ssk_ak_',
+  prefix: 'ak_',
   lookup,
   onFailure: auditFailureHook(audit, 'apiKey.auth'),        // (req, reason) => void
 }));
@@ -690,8 +692,9 @@ const store = new RedisRateLimitStore(redisClient);
 
 ## The `SecurityContext` type
 
-Upstream auth middleware (later phases) attaches this to the request; Phase 1
-modules only **read** it:
+Auth middleware (the kit's API-key verifier, or your own) attaches this to the
+request; the downstream modules (rate limiter, signing verifier, scope guard)
+only **read** it:
 
 ```ts
 interface SecurityContext {

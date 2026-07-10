@@ -1,14 +1,13 @@
 # Security engineering practices
 
-Cross-project practices for doing security work in the personal apps (Cairn,
-Bewks, Savoro, Sano, FiDash, …). This is the **how** — the review method,
-recurring design rulings, and verification discipline. It complements
-[`SECURITY.md`](../SECURITY.md), which documents this kit's **machinery**.
+Practices for doing security work in services that consume this kit — the
+review method, recurring design rulings, and verification discipline. This is
+the **how**; it complements [`SECURITY.md`](../SECURITY.md), which documents
+this kit's **machinery**.
 
-Distilled from the Cairn security-assurance program (a threat-model review that
-turned into ~14 shipped fixes). The worked artifacts live in the Cairn repo:
-`docs/architecture/THREAT_MODEL.md` (the living model) and
-`docs/architecture/REVIEW_GATES.md` (the review gates + ticket-writing rules).
+Distilled from a security-assurance program on a production app: a threat-model
+review that turned into roughly fourteen shipped fixes. Every practice below
+was validated (or learned the hard way) in that review.
 
 ---
 
@@ -37,8 +36,8 @@ found against it are a map.
 
 ## The delivery workflow
 
-`plan → vet → implement → review → verify → merge`, and the vet/review steps use
-a **different model** than the implementer.
+`plan → vet → implement → review → verify → merge`, and the vet/review steps
+use a **different model (or reviewer)** than the implementer.
 
 - **Plan** holds the judgment (design, sequencing, trade-offs).
 - **Vet the plan adversarially** before any code. A second model, told to attack
@@ -46,11 +45,11 @@ a **different model** than the implementer.
   defeated by an unverified email change", "this mount guard would 403 valid
   requests") that would have shipped as bugs.
 - **Implement in small, scoped steps.** Narrow tasks return fast, fail cheap,
-  and keep the orchestrator in the loop. Long autonomous runs drift.
+  and keep you in the loop. Long autonomous runs drift.
 - **Review the diff adversarially.** A different model again. This catches bugs
   that look obviously correct — *including bugs in the fix for an earlier
   finding* (a claim-race that deleted the winner's session; a "transition"
-  key-acceptance that never expired; a new audit trail that skipped the Google
+  key-acceptance that never expired; a new audit trail that skipped the OAuth
   path). Cross-model disagreement is the point.
 - **Verify by exercising the change**, then merge via PR. Never commit to
   `main`/`master`.
@@ -64,9 +63,10 @@ The expensive lessons. Most of these are about **not trusting a green check**.
   is neutered proves nothing. Do this for the guard *and* for the regression
   test of each fix (a regression test must fail without the fix, or it's
   decorative).
-- **Re-verify every sub-agent claim.** "Tests pass", "already passing",
-  "pre-existing failure", "not caused by my change" — re-run and re-baseline
-  yourself. Sub-agents produce correct code but unreliable conclusions.
+- **Re-verify every delegated claim.** "Tests pass", "already passing",
+  "pre-existing failure", "not caused by my change" — whether it comes from a
+  coding agent or a hurried teammate, re-run and re-baseline yourself. Agents
+  in particular produce correct code but unreliable conclusions.
 - **Baseline "pre-existing" against a real clean checkout**, not an in-place
   stash (a stash can no-op and compare a branch against itself). A flaky suite
   that fails a *different* test each run — and still fails when serialized — is
@@ -123,8 +123,9 @@ Recurring decisions, resolved once here.
 - Fix a gap in a shared kit **in the kit** — tag a release, consume it by
   version. Don't fork the mechanic into one service.
 - The cleanest upstream-first is when the kit *already* ships the mechanism and
-  the service just adopts it (Cairn's API-key scoping was `requireScope` +
-  `SecurityContext`, already here, previously unused — no kit change needed).
+  the service just adopts it (e.g. API-key scoping was `requireScope` +
+  `SecurityContext`, already in the kit, previously unused — no kit change
+  needed).
 - **Machinery in the kit; policy in the service.** The kit runs the guard; the
   service supplies the predicate, the secrets, and what's auditable.
 
@@ -142,25 +143,36 @@ Recurring decisions, resolved once here.
   under the service umask.
 - **Investigate blast radius before a host-wide change.** A default-deny
   firewall on a multi-service box affects *every* service on it, not the one you
-  came for — enumerate the listeners first. On a single-owner home server where
-  every service binds all interfaces by design and the LAN is trusted, "harden
+  came for — enumerate the listeners first. On a single-owner box where every
+  service binds all interfaces by design and the network is trusted, "harden
   one port with a firewall" is often inconsistent and low-value; prefer a
   targeted bind or an accepted-risk entry.
 
 ## Concrete patterns proven in review
 
-Cross-referenced to the Cairn tickets that validated them, for the worked code.
+Patterns that came out of the review as shipped, tested fixes:
 
-| Pattern | Where |
-| --- | --- |
-| Fail-closed setting with one predicate | CAIRN-146 |
-| Google/OAuth account-adoption defense (resolve by provider id, refuse to adopt a password account, claim only a no-password placeholder with hygiene) | CAIRN-151 |
-| CORS deny-by-default (empty allowlist ⇒ deny, no boot-fail; same-origin app) | CAIRN-148 |
-| Structural mount-coverage tripwire | CAIRN-149, CAIRN-153 |
-| Stored-XSS invariant pinned by a single-importer + dependency tripwire | CAIRN-150 |
-| Rate-limit ordering (baseline before the auth routes so nothing bypasses it) | CAIRN-156 |
-| Session-bound email-change confirmation + CAS + pre-write validation | CAIRN-159 |
-| Kit-based API-key project scoping (adopt `requireScope`) | CAIRN-153 |
-| Always-signed webhooks (auto-gen secret, algorithm-tagged header, rotate-on-clear) | CAIRN-154 |
-| Separated signing key with no permanent dual-accept | CAIRN-155 |
-| Auth-event audit trail (dedicated table, records the unauthenticated failure, anti-enumeration preserved) | CAIRN-147 |
+- **Fail-closed setting with one predicate** — an auth-gating flag enabled only
+  by an exact affirmative value, decided in exactly one place.
+- **OAuth account-adoption defense** — resolve by provider id, refuse to adopt
+  an existing password account, claim only a no-password placeholder (with
+  hygiene on the claim).
+- **CORS deny-by-default** — an empty allowlist means deny (not allow-all), and
+  absence doesn't boot-fail a same-origin app.
+- **Structural mount-coverage tripwire** — a test that enumerates route mounts
+  and fails when a new one lacks the required guard.
+- **Stored-XSS invariant pinned by a tripwire** — the sanitizer has a single
+  importer, enforced by a dependency test so a bypass can't creep in.
+- **Rate-limit ordering** — the baseline limiter mounts before the auth routes
+  so nothing bypasses it.
+- **Session-bound email-change confirmation** — token must belong to the
+  authenticated caller, with CAS at the write and pre-write validation.
+- **Kit-based API-key scoping** — adopt `requireScope` + `SecurityContext`
+  rather than a bespoke per-route check.
+- **Always-signed webhooks** — auto-generate the secret, tag the algorithm in
+  the header, rotate on clear.
+- **Separated signing key with no permanent dual-accept** — switch keys and let
+  short-lived artifacts age out instead of accepting the retired key forever.
+- **Auth-event audit trail** — a dedicated table that records the
+  unauthenticated failure too, while the client response stays
+  anti-enumeration-safe.

@@ -5,7 +5,7 @@ consuming service owns **policy** (secrets, persistence, what's auditable).
 This is a per-pillar threat model — what each module defends against, and
 what it explicitly does **not**.
 
-> For the cross-project **practices** — how to run a security review, the
+> For the broader **practices** — how to run a security review, the
 > recurring design rulings, and the verification discipline — see
 > [`docs/security-practices.md`](docs/security-practices.md).
 

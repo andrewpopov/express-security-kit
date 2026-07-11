@@ -67,6 +67,14 @@ export interface CorsPolicy {
  *   CONFIGURED allowlist let this propagate (fail closed at construction: a
  *   typo'd origin must never be silently dropped). Callers normalizing an
  *   INCOMING request origin catch this and treat it as "does not match".
+ * - Also throws when the parsed URL has an OPAQUE origin (`new URL(...).origin
+ *   === 'null'` for schemes like `data:`, `file:`, `javascript:`, `blob:`
+ *   without an inner http(s) URL, etc.) — WITHOUT this, a misconfigured
+ *   `data:`/`file:` allowed-origin would silently collapse to the literal
+ *   string `"null"` and authorize the shared `Origin: null` browsers send for
+ *   every sandboxed-iframe/file:/data: context. The explicit literal `"null"`
+ *   opt-in above is unaffected: this only rejects the SILENT collapse from a
+ *   parsed opaque-origin URL, not a deliberate `"null"` string.
  */
 export declare function normalizeOrigin(value: string): string | null;
 export declare function resolveCorsPolicy(config: CorsPolicyConfig): CorsPolicy;

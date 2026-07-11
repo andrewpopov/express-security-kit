@@ -152,6 +152,78 @@ describe('resolveCorsPolicy — invalid configured origin throws at construction
   });
 });
 
+describe('normalizeOrigin — opaque-origin schemes throw instead of silently collapsing to "null"', () => {
+  it('throws for a data: URL (opaque origin)', () => {
+    expect(() => normalizeOrigin('data:text/plain,x')).toThrow(/opaque-origin/i);
+  });
+
+  it('throws for a file: URL (opaque origin)', () => {
+    expect(() => normalizeOrigin('file:///x')).toThrow(/opaque-origin/i);
+  });
+
+  it('throws for a javascript: URL (opaque origin)', () => {
+    expect(() => normalizeOrigin('javascript:alert(1)')).toThrow(/opaque-origin/i);
+  });
+
+  it('still preserves the explicit literal "null" opt-in', () => {
+    expect(normalizeOrigin('null')).toBe('null');
+  });
+
+  it('http:/https: origins still normalize as before (regression guard)', () => {
+    expect(normalizeOrigin('https://example.com')).toBe('https://example.com');
+    expect(normalizeOrigin('http://localhost:3000')).toBe('http://localhost:3000');
+  });
+});
+
+describe('resolveCorsPolicy — opaque-origin scheme in configured allowlist throws at construction', () => {
+  it('throws for a data: configured origin', () => {
+    expect(() =>
+      resolveCorsPolicy({ env: 'development', origins: ['data:text/plain,x'] }),
+    ).toThrow(/opaque-origin/i);
+  });
+
+  it('throws for a file: configured origin', () => {
+    expect(() =>
+      resolveCorsPolicy({ env: 'development', origins: ['file:///x'] }),
+    ).toThrow(/opaque-origin/i);
+  });
+
+  it('throws for a javascript: configured origin', () => {
+    expect(() =>
+      resolveCorsPolicy({ env: 'development', origins: ['javascript:alert(1)'] }),
+    ).toThrow(/opaque-origin/i);
+  });
+
+  it('an explicit literal "null" in the allowlist is still preserved and matches an incoming Origin: null', () => {
+    const policy = resolveCorsPolicy({ env: 'development', origins: ['null'] });
+    expect(policy.origins).toContain('null');
+    expect(policy.allow('null')).toBe(true);
+  });
+
+  it('an incoming data: Origin is denied, even when the allowlist explicitly contains the literal "null"', () => {
+    const policy = resolveCorsPolicy({ env: 'development', origins: ['null'] });
+    expect(policy.allow('data:text/plain,x')).toBe(false);
+    expect(policy.resolveAllowedOrigin('data:text/plain,x')).toBe(false);
+  });
+
+  it('an incoming file: Origin is denied, even when the allowlist explicitly contains the literal "null"', () => {
+    const policy = resolveCorsPolicy({ env: 'development', origins: ['null'] });
+    expect(policy.allow('file:///x')).toBe(false);
+    expect(policy.resolveAllowedOrigin('file:///x')).toBe(false);
+  });
+
+  it('http:/https: origins still resolve and match as before (regression guard)', () => {
+    const policy = resolveCorsPolicy({
+      env: 'production',
+      origins: ['https://app.example.com'],
+    });
+    expect(policy.allow('https://app.example.com')).toBe(true);
+    expect(policy.resolveAllowedOrigin('https://app.example.com')).toBe(
+      'https://app.example.com',
+    );
+  });
+});
+
 describe('resolveCorsPolicy — allowNoOrigin', () => {
   it('default true: an undefined origin (curl / server-to-server) is allowed', () => {
     const policy = resolveCorsPolicy({ env: 'production', origins: ['https://app.example.com'] });

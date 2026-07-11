@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.auditDeniedHook = exports.auditRateLimitHook = exports.auditFailureHook = exports.buildAuditEvent = exports.ConsoleAuditSink = exports.AuditBuffer = exports.MemoryNonceStore = exports.createRequestSigningVerifier = exports.sha256Hex = exports.signRequest = exports.buildCanonicalString = exports.requireScope = exports.timingSafeEqualHex = exports.scopedHmacHasher = exports.sha256Hasher = exports.verifyApiKey = exports.createApiKeyAuth = exports.decodedJwtKey = exports.defaultKeyGenerator = exports.verifiedIdentityKey = exports.ipKey = exports.MemoryRateLimitStore = exports.createRateLimiter = exports.createHelmetMiddleware = void 0;
+exports.normalizeOrigin = exports.resolveCorsPolicy = exports.createWebhookVerifier = exports.verifyWebhookSignature = exports.auditDeniedHook = exports.auditRateLimitHook = exports.auditFailureHook = exports.buildAuditEvent = exports.ConsoleAuditSink = exports.AuditBuffer = exports.MemoryNonceStore = exports.createRequestSigningVerifier = exports.sha256Hex = exports.signRequest = exports.buildCanonicalString = exports.requireScope = exports.timingSafeEqualHex = exports.scopedHmacHasher = exports.sha256Hasher = exports.verifyApiKey = exports.createApiKeyAuth = exports.decodedJwtKey = exports.defaultKeyGenerator = exports.verifiedIdentityKey = exports.ipKey = exports.MemoryRateLimitStore = exports.createRateLimiter = exports.createHelmetMiddleware = void 0;
 // Side-effect import: merges the `securityContext`/`rawBody` fields onto the
 // ambient `Express.Request` type. MUST be a value import (not `import type`)
 // so the augmentation is actually loaded by root consumers.
@@ -55,6 +55,34 @@ const hooks_1 = require("./core/audit/hooks");
 exports.auditFailureHook = hooks_1.auditFailureHook;
 exports.auditRateLimitHook = hooks_1.auditRateLimitHook;
 exports.auditDeniedHook = hooks_1.auditDeniedHook;
+// ---------------------------------------------------------------------------
+// Phase 2 (v1.2.0) modules, also re-exported from root as of v1.2.1 for
+// consistency with the other Express middleware above. Purely additive: the
+// `./webhook`, `./express/webhook`, `./cors`, and `./express/cors` subpaths
+// are unchanged.
+// Webhook signature verification. `verifyWebhookSignature` is already
+// framework-agnostic (it takes a plain `WebhookHeaders` record, not
+// `Request`) and `createWebhookVerifier` is already Express-only, so both are
+// safe direct re-exports here — no Request-pinning wrapper needed.
+var verify_1 = require("./core/webhook/verify");
+Object.defineProperty(exports, "verifyWebhookSignature", { enumerable: true, get: function () { return verify_1.verifyWebhookSignature; } });
+var createWebhookVerifier_1 = require("./express/webhook/createWebhookVerifier");
+Object.defineProperty(exports, "createWebhookVerifier", { enumerable: true, get: function () { return createWebhookVerifier_1.createWebhookVerifier; } });
+// CORS origin-resolution policy. Framework-agnostic — no `cors`/express
+// dependency — so it's a safe direct re-export.
+var policy_1 = require("./core/cors/policy");
+Object.defineProperty(exports, "resolveCorsPolicy", { enumerable: true, get: function () { return policy_1.resolveCorsPolicy; } });
+Object.defineProperty(exports, "normalizeOrigin", { enumerable: true, get: function () { return policy_1.normalizeOrigin; } });
+// `corsOptions` (the `cors` package adapter) deliberately STAYS on the
+// `./express/cors` subpath only — NOT re-exported here. Its return type is
+// `CorsOptions` from the `cors` package (a type-only import in
+// ./express/cors/corsOptions.ts); re-exporting it from root pulls that type
+// into dist/index.d.ts, so ANY root consumer's TS compile must resolve
+// `@types/cors` even if they never touch CORS. Verified via `verify:pack`:
+// a consumer that installs `express` (root's own peer) but NOT `cors`/
+// `@types/cors` fails to type-check `import { corsOptions } from '<pkg>'`
+// with `TS2307: Cannot find module 'cors'`. `resolveCorsPolicy` and
+// `normalizeOrigin` above have no such dependency and are safe on root.
 // Note: the Redis store is intentionally NOT exported here. Import it from the
 // '@andrewpopov/express-security-kit/redis-store' subpath so the core entry
 // never references ioredis.

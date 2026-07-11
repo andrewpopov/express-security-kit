@@ -45,3 +45,10 @@ export declare const auditFailureHook: (buffer: AuditBufferClass, action: string
 export declare const auditRateLimitHook: (buffer: AuditBufferClass, action: string, options?: AuditHookOptions) => (req: Request, key: string) => void;
 export declare const auditDeniedHook: (buffer: AuditBufferClass, action: string, options?: AuditHookOptions) => (req: Request) => void;
 export type { ConsoleAuditSinkLogger } from './core/audit/ConsoleAuditSink';
+export { verifyWebhookSignature } from './core/webhook/verify';
+export type { WebhookHeaders, HeaderReader, ReplayIdFromVerifiedBody, ReplayConfig, HmacSha256Config, Ed25519TimestampConfig, Ed25519Config, WebhookVerifyConfig, WebhookVerifyInput, WebhookVerifyReason, WebhookVerifyOutcome, PublicKeyResolver, } from './core/webhook/verify';
+export type { SecretResolver as WebhookSecretResolver } from './core/webhook/verify';
+export { createWebhookVerifier } from './express/webhook/createWebhookVerifier';
+export type { WebhookVerifierLogger, WebhookVerifierExpressConfig, WebhookVerifierConfig, } from './express/webhook/createWebhookVerifier';
+export { resolveCorsPolicy, normalizeOrigin } from './core/cors/policy';
+export type { CorsPolicyConfig, CorsPolicy, CorsRejectHook } from './core/cors/policy';

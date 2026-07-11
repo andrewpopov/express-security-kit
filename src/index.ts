@@ -167,6 +167,61 @@ export const auditDeniedHook: (
 ) => (req: Request) => void = auditDeniedHookCore;
 export type { ConsoleAuditSinkLogger } from './core/audit/ConsoleAuditSink';
 
+// ---------------------------------------------------------------------------
+// Phase 2 (v1.2.0) modules, also re-exported from root as of v1.2.1 for
+// consistency with the other Express middleware above. Purely additive: the
+// `./webhook`, `./express/webhook`, `./cors`, and `./express/cors` subpaths
+// are unchanged.
+
+// Webhook signature verification. `verifyWebhookSignature` is already
+// framework-agnostic (it takes a plain `WebhookHeaders` record, not
+// `Request`) and `createWebhookVerifier` is already Express-only, so both are
+// safe direct re-exports here — no Request-pinning wrapper needed.
+export { verifyWebhookSignature } from './core/webhook/verify';
+export type {
+  WebhookHeaders,
+  HeaderReader,
+  ReplayIdFromVerifiedBody,
+  ReplayConfig,
+  HmacSha256Config,
+  Ed25519TimestampConfig,
+  Ed25519Config,
+  WebhookVerifyConfig,
+  WebhookVerifyInput,
+  WebhookVerifyReason,
+  WebhookVerifyOutcome,
+  PublicKeyResolver,
+} from './core/webhook/verify';
+// Renamed on export: the root already exports a `SecretResolver` type (above,
+// from `./express/signing/createRequestSigningVerifier` — resolves a
+// request-signing secret as `(req, ctx) => ...`). The webhook module's
+// `SecretResolver` has a different shape, `(headers: HeaderReader) => ...`,
+// so it is aliased here to avoid colliding with the existing export.
+export type { SecretResolver as WebhookSecretResolver } from './core/webhook/verify';
+
+export { createWebhookVerifier } from './express/webhook/createWebhookVerifier';
+export type {
+  WebhookVerifierLogger,
+  WebhookVerifierExpressConfig,
+  WebhookVerifierConfig,
+} from './express/webhook/createWebhookVerifier';
+
+// CORS origin-resolution policy. Framework-agnostic — no `cors`/express
+// dependency — so it's a safe direct re-export.
+export { resolveCorsPolicy, normalizeOrigin } from './core/cors/policy';
+export type { CorsPolicyConfig, CorsPolicy, CorsRejectHook } from './core/cors/policy';
+
+// `corsOptions` (the `cors` package adapter) deliberately STAYS on the
+// `./express/cors` subpath only — NOT re-exported here. Its return type is
+// `CorsOptions` from the `cors` package (a type-only import in
+// ./express/cors/corsOptions.ts); re-exporting it from root pulls that type
+// into dist/index.d.ts, so ANY root consumer's TS compile must resolve
+// `@types/cors` even if they never touch CORS. Verified via `verify:pack`:
+// a consumer that installs `express` (root's own peer) but NOT `cors`/
+// `@types/cors` fails to type-check `import { corsOptions } from '<pkg>'`
+// with `TS2307: Cannot find module 'cors'`. `resolveCorsPolicy` and
+// `normalizeOrigin` above have no such dependency and are safe on root.
+
 // Note: the Redis store is intentionally NOT exported here. Import it from the
 // '@andrewpopov/express-security-kit/redis-store' subpath so the core entry
 // never references ioredis.

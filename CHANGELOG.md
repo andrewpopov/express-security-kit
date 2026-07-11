@@ -17,6 +17,38 @@ CHANGELOG entry.
 
 ---
 
+## 1.2.1
+
+Purely additive: the CORS + webhook module surfaces added in v1.2.0 are now
+**also** available from the root (`.`) export, for consistency with the other
+Express middleware (`createHelmetMiddleware`, `createRateLimiter`,
+`createApiKeyAuth`, `requireScope`, `createRequestSigningVerifier`, ...) that
+was already root-exported. The `./cors`, `./express/cors`, `./webhook`, and
+`./express/webhook` subpaths are unchanged — nothing moves, nothing is
+removed.
+
+- Root now also exports: `verifyWebhookSignature`, `createWebhookVerifier`,
+  `resolveCorsPolicy`, `normalizeOrigin`, and their public types
+  (`WebhookVerifyConfig`, `HmacSha256Config`, `Ed25519Config`,
+  `Ed25519TimestampConfig`, `ReplayConfig`, `WebhookVerifyReason`,
+  `WebhookVerifyOutcome`, `WebhookHeaders`, `HeaderReader`,
+  `PublicKeyResolver`, `ReplayIdFromVerifiedBody`, `WebhookVerifierConfig`,
+  `WebhookVerifierExpressConfig`, `WebhookVerifierLogger`,
+  `CorsPolicyConfig`, `CorsPolicy`, `CorsRejectHook`). The webhook module's
+  `SecretResolver` type collides by name with the root's existing (request-
+  signing) `SecretResolver` — it is re-exported as `WebhookSecretResolver`
+  instead; the two have different signatures and were never the same type.
+- `corsOptions` (the `cors`-package adapter in `./express/cors`) deliberately
+  **stays subpath-only** and is NOT added to root: its return type is
+  `CorsOptions` from the `cors` package, and re-exporting it from root would
+  force `@types/cors` to resolve for every root consumer's TypeScript
+  compile, even one that never uses CORS. Verified via `verify:pack`: a
+  consumer that installs only `express` (root's own peer) — no `cors`/
+  `@types/cors` — fails `tsc` with `TS2307: Cannot find module 'cors'` when
+  `corsOptions` is exported from root, and passes once it is left off.
+  `resolveCorsPolicy`/`normalizeOrigin` have no such dependency and are safe
+  on root.
+
 ## 1.2.0
 
 Three new **framework-agnostic security modules** (additive; the v1.1.0 root

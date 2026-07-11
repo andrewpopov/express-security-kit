@@ -49,6 +49,12 @@ try {
   if (!existsSync(join(pkgRoot, 'dist', 'core', 'signing', 'nonce-redis.d.ts'))) {
     fail('dist/core/signing/nonce-redis.d.ts is missing after build');
   }
+  if (!existsSync(join(pkgRoot, 'dist', 'core', 'cors', 'policy.d.ts'))) {
+    fail('dist/core/cors/policy.d.ts is missing after build');
+  }
+  if (!existsSync(join(pkgRoot, 'dist', 'express', 'cors', 'corsOptions.d.ts'))) {
+    fail('dist/express/cors/corsOptions.d.ts is missing after build');
+  }
 
   console.log('[verify:pack] Packing tarball...');
   const packOut = run('npm', ['pack', '--json', '--pack-destination', workDir], {
@@ -69,9 +75,16 @@ try {
   if (!contents.includes('package/dist/core/signing/nonce-redis.d.ts')) {
     fail('dist/core/signing/nonce-redis.d.ts is not present in the packed tarball');
   }
+  if (!contents.includes('package/dist/core/cors/policy.d.ts')) {
+    fail('dist/core/cors/policy.d.ts is not present in the packed tarball');
+  }
+  if (!contents.includes('package/dist/express/cors/corsOptions.d.ts')) {
+    fail('dist/express/cors/corsOptions.d.ts is not present in the packed tarball');
+  }
   console.log(
-    '[verify:pack] OK: dist/index.d.ts, dist/core/index.d.ts, and ' +
-      'dist/core/signing/nonce-redis.d.ts ship in tarball',
+    '[verify:pack] OK: dist/index.d.ts, dist/core/index.d.ts, ' +
+      'dist/core/signing/nonce-redis.d.ts, dist/core/cors/policy.d.ts, and ' +
+      'dist/express/cors/corsOptions.d.ts ship in tarball',
   );
 
   // Set up a throwaway consumer project and install the tarball.
@@ -160,6 +173,34 @@ try {
       console.error('CJS: RedisNonceStore should not be exported from ./core');
       process.exit(9);
     }
+    // './cors' subpath: framework-agnostic origin policy. This consumer never
+    // installed the 'cors' npm package (only 'express' + 'helmet' peers below)
+    // — proving core CORS loads fine with the 'cors' peer absent.
+    const cors = require('${pkg.name}/cors');
+    if (typeof cors.resolveCorsPolicy !== 'function') {
+      console.error('CJS: ./cors subpath missing resolveCorsPolicy');
+      process.exit(10);
+    }
+    // resolveCorsPolicy must NOT leak from the main entry or './core'.
+    if ('resolveCorsPolicy' in mod) {
+      console.error('CJS: resolveCorsPolicy should not be exported from main entry');
+      process.exit(11);
+    }
+    if ('resolveCorsPolicy' in core) {
+      console.error('CJS: resolveCorsPolicy should not be exported from ./core');
+      process.exit(12);
+    }
+    // './express/cors' subpath: same absent-'cors'-peer consumer — corsOptions()
+    // only uses 'cors' as a TYPE, never a runtime import, so it must load too.
+    const expressCors = require('${pkg.name}/express/cors');
+    if (typeof expressCors.corsOptions !== 'function') {
+      console.error('CJS: ./express/cors subpath missing corsOptions (with cors peer absent)');
+      process.exit(13);
+    }
+    if ('corsOptions' in mod) {
+      console.error('CJS: corsOptions should not be exported from main entry');
+      process.exit(14);
+    }
     console.log('CJS OK');
   `;
   writeFileSync(join(consumerDir, 'smoke.cjs'), cjsSmoke);
@@ -195,6 +236,8 @@ try {
     import * as rootMod from '${pkg.name}';
     import { RedisRateLimitStore } from '${pkg.name}/redis-store';
     import { RedisNonceStore } from '${pkg.name}/nonce-redis';
+    import { resolveCorsPolicy } from '${pkg.name}/cors';
+    import { corsOptions } from '${pkg.name}/express/cors';
     import {
       verifyApiKey as coreVerifyApiKey, extractRawKey, sha256Hasher as coreSha256Hasher,
       scopedHmacHasher, timingSafeEqualHex as coreTimingSafeEqualHex, MemoryRateLimitStore,
@@ -250,6 +293,30 @@ try {
     if ('RedisNonceStore' in coreMod) {
       console.error('ESM: RedisNonceStore should not be exported from ./core');
       process.exit(9);
+    }
+    // './cors' and './express/cors' ESM named imports resolve — with the
+    // 'cors' npm package absent from this consumer, proving core CORS (and,
+    // since corsOptions() only uses 'cors' as a type, the express wrapper
+    // too) load fine without the optional peer installed.
+    if (typeof resolveCorsPolicy !== 'function') {
+      console.error('ESM: resolveCorsPolicy subpath import failed (cors peer absent)');
+      process.exit(10);
+    }
+    if (typeof corsOptions !== 'function') {
+      console.error('ESM: corsOptions subpath import failed (cors peer absent)');
+      process.exit(13);
+    }
+    if ('resolveCorsPolicy' in rootMod) {
+      console.error('ESM: resolveCorsPolicy should not be exported from main entry');
+      process.exit(11);
+    }
+    if ('resolveCorsPolicy' in coreMod) {
+      console.error('ESM: resolveCorsPolicy should not be exported from ./core');
+      process.exit(12);
+    }
+    if ('corsOptions' in rootMod) {
+      console.error('ESM: corsOptions should not be exported from main entry');
+      process.exit(14);
     }
     console.log('ESM OK');
   `;

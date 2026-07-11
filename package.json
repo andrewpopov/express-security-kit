@@ -22,6 +22,14 @@
     "./nonce-redis": {
       "types": "./dist/core/signing/nonce-redis.d.ts",
       "default": "./dist/core/signing/nonce-redis.js"
+    },
+    "./cors": {
+      "types": "./dist/core/cors/policy.d.ts",
+      "default": "./dist/core/cors/policy.js"
+    },
+    "./express/cors": {
+      "types": "./dist/express/cors/corsOptions.d.ts",
+      "default": "./dist/express/cors/corsOptions.js"
     }
   },
   "files": [
@@ -39,17 +47,23 @@
     "verify:pack": "node scripts/verify-pack.mjs"
   },
   "peerDependencies": {
+    "cors": ">=2",
     "express": ">=4",
     "helmet": ">=7"
   },
   "peerDependenciesMeta": {
+    "cors": {
+      "optional": true
+    },
     "ioredis": {
       "optional": true
     }
   },
   "devDependencies": {
+    "@types/cors": "^2.8.19",
     "@types/express": "^4.17.21",
     "@types/node": "^20.14.0",
+    "cors": "^2.8.6",
     "express": "^4.19.2",
     "fast-check": "^4.8.0",
     "helmet": "^7.1.0",

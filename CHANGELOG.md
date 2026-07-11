@@ -17,6 +17,36 @@ CHANGELOG entry.
 
 ---
 
+## 1.1.0
+
+Framework-agnostic **core carve** (Phase 1 of the core/adapter split). Backward
+compatible — the root (`.`) export is unchanged in runtime exports and public
+type shapes, so cairn / savoro / smarthome upgrade with **zero code change**.
+
+- **New `./core` subpath export** exposing the framework-agnostic surface
+  (`verifyApiKey`, hashers, key generators, rate-limit stores, nonce store,
+  audit buffer/hooks, signing primitives) with no `express`/`fastify` in its
+  module graph. Enables a future Fastify adapter to reuse the security
+  machinery. Request-coupled core types are generic over a new `SecurityRequest`
+  seam: `<Req extends SecurityRequest = SecurityRequest>`.
+- **Internal restructure** into `src/core/` (agnostic) + `src/express/`
+  (adapter). The Express `Request` augmentation (`req.securityContext`,
+  `req.rawBody`) moved to an express-only module, loaded via a side-effect
+  import from the root so root consumers keep it. The signing verifier and rate
+  limiter are unchanged (kept whole in the Express adapter).
+- **New guards:** `check:core-agnostic` (fails on any `express`/`fastify` import
+  — incl. `import type`, dynamic `import()`, and relative escapes — under
+  `src/core/`); `verify:pack` now type-checks a node16-strict consumer fixture
+  asserting the augmentation and the `Request`-pinned public signatures.
+
+Notes for consumers:
+- Root `ApiKeyAuthConfig` and `DecodedJwtKeyOptions` are now `type` aliases
+  (previously `interface`). Only observable if you declaration-merge onto those
+  names, which no known consumer does.
+- The `./core` subpath (like `./redis-store`) requires TypeScript
+  `moduleResolution` of `node16`/`nodenext`/`bundler`; `node10` cannot resolve
+  subpath `exports`.
+
 ## 1.0.0
 
 First stable release. **No API changes from 0.8.0** — this promotes the library to

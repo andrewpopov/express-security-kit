@@ -2,11 +2,14 @@
 /**
  * Pack the package into a tarball, install it into a throwaway project, and
  * assert that:
- *   1. dist/index.d.ts ships inside the tarball.
- *   2. CommonJS `require()` exposes createRateLimiter + createHelmetMiddleware.
+ *   1. dist/index.d.ts AND dist/core/index.d.ts ship inside the tarball.
+ *   2. CommonJS `require()` exposes createRateLimiter + createHelmetMiddleware
+ *      from the root entry, and the framework-agnostic surface from `./core`.
  *   3. Native ESM `import { ... }` resolves the same named exports (this is what
  *      catches the "member-expression export" bug where cjs-module-lexer can't
- *      see the names for ESM consumers).
+ *      see the names for ESM consumers) from BOTH the root entry and `./core`.
+ *   4. Neither the root entry nor `./core` leaks `RedisRateLimitStore` — it is
+ *      only reachable via the `./redis-store` subpath.
  *
  * Exits non-zero with a clear message on any failure.
  */
@@ -34,8 +37,14 @@ try {
   console.log('[verify:pack] Building...');
   run('npm', ['run', 'build'], { cwd: pkgRoot, stdio: 'inherit' });
 
+  console.log('[verify:pack] Checking core/ stays framework-agnostic...');
+  run('node', ['scripts/check-core-agnostic.mjs'], { cwd: pkgRoot, stdio: 'inherit' });
+
   if (!existsSync(join(pkgRoot, 'dist', 'index.d.ts'))) {
     fail('dist/index.d.ts is missing after build');
+  }
+  if (!existsSync(join(pkgRoot, 'dist', 'core', 'index.d.ts'))) {
+    fail('dist/core/index.d.ts is missing after build');
   }
 
   console.log('[verify:pack] Packing tarball...');
@@ -46,12 +55,15 @@ try {
   const filename = packInfo[0].filename;
   tarballPath = join(workDir, filename);
 
-  // 1. Assert the declaration file ships inside the tarball.
+  // 1. Assert the declaration files ship inside the tarball.
   const contents = run('tar', ['-tzf', tarballPath]);
   if (!contents.includes('package/dist/index.d.ts')) {
     fail('dist/index.d.ts is not present in the packed tarball');
   }
-  console.log('[verify:pack] OK: dist/index.d.ts ships in tarball');
+  if (!contents.includes('package/dist/core/index.d.ts')) {
+    fail('dist/core/index.d.ts is not present in the packed tarball');
+  }
+  console.log('[verify:pack] OK: dist/index.d.ts and dist/core/index.d.ts ship in tarball');
 
   // Set up a throwaway consumer project and install the tarball.
   const consumerDir = join(workDir, 'consumer');
@@ -87,6 +99,7 @@ try {
       'buildCanonicalString', 'MemoryNonceStore',
       'AuditBuffer', 'buildAuditEvent', 'ConsoleAuditSink',
       'auditFailureHook', 'auditRateLimitHook', 'auditDeniedHook',
+      'ipKey', 'verifiedIdentityKey', 'defaultKeyGenerator', 'decodedJwtKey',
     ].filter((n) => typeof mod[n] !== 'function');
     if (missing.length) {
       console.error('CJS missing exports: ' + missing.join(', '));
@@ -103,6 +116,25 @@ try {
       console.error('CJS: redis-store subpath missing RedisRateLimitStore');
       process.exit(4);
     }
+    // './core' subpath: the framework-agnostic surface.
+    const core = require('${pkg.name}/core');
+    const coreMissing = [
+      'verifyApiKey', 'extractRawKey', 'sha256Hasher', 'scopedHmacHasher',
+      'timingSafeEqualHex', 'MemoryRateLimitStore', 'ipKey', 'verifiedIdentityKey',
+      'defaultKeyGenerator', 'decodedJwtKey', 'buildCanonicalString', 'signRequest',
+      'sha256Hex', 'MemoryNonceStore', 'AuditBuffer', 'buildAuditEvent',
+      'ConsoleAuditSink', 'auditFailureHook', 'auditRateLimitHook', 'auditDeniedHook',
+      'buildDefaultContext',
+    ].filter((n) => typeof core[n] !== 'function');
+    if (coreMissing.length) {
+      console.error('CJS ./core missing exports: ' + coreMissing.join(', '));
+      process.exit(5);
+    }
+    // Redis store must NOT leak from './core' either.
+    if ('RedisRateLimitStore' in core) {
+      console.error('CJS: RedisRateLimitStore should not be exported from ./core');
+      process.exit(6);
+    }
     console.log('CJS OK');
   `;
   writeFileSync(join(consumerDir, 'smoke.cjs'), cjsSmoke);
@@ -118,9 +150,9 @@ try {
   console.log('[verify:pack] OK: RateLimitRejection type exported');
 
   // Assert the RateLimitStore interface declares `decrement` (the refund hook).
-  const storeDts = readFileSync(join(pkgRoot, 'dist', 'rate-limit', 'store.d.ts'), 'utf8');
+  const storeDts = readFileSync(join(pkgRoot, 'dist', 'core', 'rate-limit', 'store.d.ts'), 'utf8');
   if (!/decrement\s*\(/.test(storeDts)) {
-    fail('RateLimitStore.decrement is missing from dist/rate-limit/store.d.ts');
+    fail('RateLimitStore.decrement is missing from dist/core/rate-limit/store.d.ts');
   }
   console.log('[verify:pack] OK: RateLimitStore.decrement declared');
 
@@ -132,14 +164,34 @@ try {
       createRequestSigningVerifier, signRequest, buildCanonicalString, MemoryNonceStore,
       AuditBuffer, buildAuditEvent, ConsoleAuditSink,
       auditFailureHook, auditRateLimitHook, auditDeniedHook,
+      ipKey as rootIpKey, verifiedIdentityKey as rootVerifiedIdentityKey,
+      defaultKeyGenerator as rootDefaultKeyGenerator, decodedJwtKey as rootDecodedJwtKey,
     } from '${pkg.name}';
+    import * as rootMod from '${pkg.name}';
     import { RedisRateLimitStore } from '${pkg.name}/redis-store';
+    import {
+      verifyApiKey as coreVerifyApiKey, extractRawKey, sha256Hasher as coreSha256Hasher,
+      scopedHmacHasher, timingSafeEqualHex as coreTimingSafeEqualHex, MemoryRateLimitStore,
+      ipKey, verifiedIdentityKey, defaultKeyGenerator, decodedJwtKey,
+      buildCanonicalString as coreBuildCanonicalString, signRequest as coreSignRequest, sha256Hex,
+      MemoryNonceStore as CoreMemoryNonceStore, AuditBuffer as CoreAuditBuffer,
+      buildAuditEvent as coreBuildAuditEvent, ConsoleAuditSink as CoreConsoleAuditSink,
+      auditFailureHook as coreAuditFailureHook, auditRateLimitHook as coreAuditRateLimitHook,
+      auditDeniedHook as coreAuditDeniedHook, buildDefaultContext as coreBuildDefaultContext,
+    } from '${pkg.name}/core';
+    import * as coreMod from '${pkg.name}/core';
     const fns = {
       createRateLimiter, createHelmetMiddleware,
       createApiKeyAuth, verifyApiKey, requireScope, sha256Hasher, timingSafeEqualHex,
       createRequestSigningVerifier, signRequest, buildCanonicalString, MemoryNonceStore,
       AuditBuffer, buildAuditEvent, ConsoleAuditSink,
       auditFailureHook, auditRateLimitHook, auditDeniedHook,
+      rootIpKey, rootVerifiedIdentityKey, rootDefaultKeyGenerator, rootDecodedJwtKey,
+      coreVerifyApiKey, extractRawKey, coreSha256Hasher, scopedHmacHasher,
+      coreTimingSafeEqualHex, MemoryRateLimitStore, ipKey, verifiedIdentityKey,
+      defaultKeyGenerator, decodedJwtKey, coreBuildCanonicalString, coreSignRequest, sha256Hex,
+      CoreMemoryNonceStore, CoreAuditBuffer, coreBuildAuditEvent, CoreConsoleAuditSink,
+      coreAuditFailureHook, coreAuditRateLimitHook, coreAuditDeniedHook, coreBuildDefaultContext,
     };
     for (const [name, fn] of Object.entries(fns)) {
       if (typeof fn !== 'function') {
@@ -151,12 +203,84 @@ try {
       console.error('ESM: RedisRateLimitStore subpath import failed');
       process.exit(4);
     }
+    // Redis store must NOT leak from either the root entry or './core'.
+    if ('RedisRateLimitStore' in rootMod) {
+      console.error('ESM: RedisRateLimitStore should not be exported from main entry');
+      process.exit(3);
+    }
+    if ('RedisRateLimitStore' in coreMod) {
+      console.error('ESM: RedisRateLimitStore should not be exported from ./core');
+      process.exit(6);
+    }
     console.log('ESM OK');
   `;
   writeFileSync(join(consumerDir, 'smoke.mjs'), esmSmoke);
   const esmOut = run('node', ['smoke.mjs'], { cwd: consumerDir });
   if (!esmOut.includes('ESM OK')) fail('ESM smoke did not report OK');
   console.log('[verify:pack] OK: ESM named imports resolve');
+
+  // 5. TypeScript consumer type-check: assert the ambient Express
+  //    augmentation (req.securityContext / req.rawBody) is visible to a
+  //    consumer that imports the ROOT package, and that the introspection
+  //    surfaces (verifyApiKey, auditFailureHook) stay pinned to express
+  //    `Request` rather than the generic `SecurityRequest`.
+  console.log('[verify:pack] Installing TypeScript + express types into consumer...');
+  run(
+    'npm',
+    ['install', '--no-audit', '--no-fund', '--save-dev', 'typescript', '@types/express'],
+    { cwd: consumerDir, stdio: 'inherit' },
+  );
+
+  const tsFixture = `
+    import '${pkg.name}';
+    import { verifyApiKey, auditFailureHook } from '${pkg.name}';
+    import type { Request } from 'express';
+
+    declare const req: Request;
+
+    // Ambient augmentation: securityContext / rawBody must be visible on
+    // express.Request once the root package is imported.
+    const principalId: string | undefined = req.securityContext?.principalId;
+    const rawBody: string | Buffer | undefined = req.rawBody;
+    void principalId;
+    void rawBody;
+
+    // Introspection stays Request-pinned: these param types must be
+    // assignable from a plain express.Request.
+    type VerifyApiKeyReqParam = Parameters<typeof verifyApiKey>[1];
+    type AuditFailureReqParam = Parameters<ReturnType<typeof auditFailureHook>>[0];
+    const asVerifyApiKeyReq: VerifyApiKeyReqParam = req;
+    const asAuditFailureReq: AuditFailureReqParam = req;
+    void asVerifyApiKeyReq;
+    void asAuditFailureReq;
+  `;
+  writeFileSync(join(consumerDir, 'fixture.ts'), tsFixture);
+
+  const tsconfig = {
+    compilerOptions: {
+      strict: true,
+      module: 'node16',
+      moduleResolution: 'node16',
+      target: 'es2022',
+      skipLibCheck: false,
+      noEmit: true,
+    },
+    include: ['fixture.ts'],
+  };
+  writeFileSync(join(consumerDir, 'tsconfig.json'), JSON.stringify(tsconfig, null, 2));
+
+  console.log('[verify:pack] Type-checking consumer fixture against packed types...');
+  const tscBin = join(consumerDir, 'node_modules', '.bin', 'tsc');
+  try {
+    run(tscBin, ['-p', 'tsconfig.json'], { cwd: consumerDir });
+  } catch (err) {
+    const output = [err.stdout, err.stderr].filter(Boolean).join('\n');
+    fail(`consumer TypeScript compile failed:\n${output}`);
+  }
+  console.log(
+    '[verify:pack] OK: consumer TypeScript compile succeeds ' +
+      '(ambient augmentation + Request-pinned introspection)',
+  );
 
   console.log('\n[verify:pack] PASS: all checks green');
 } finally {

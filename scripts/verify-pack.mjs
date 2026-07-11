@@ -135,6 +135,11 @@ try {
       'AuditBuffer', 'buildAuditEvent', 'ConsoleAuditSink',
       'auditFailureHook', 'auditRateLimitHook', 'auditDeniedHook',
       'ipKey', 'verifiedIdentityKey', 'defaultKeyGenerator', 'decodedJwtKey',
+      // v1.2.1: the Phase-2 module surfaces, also re-exported from root.
+      // corsOptions is DELIBERATELY excluded — see src/index.ts and the
+      // dedicated check below (it must stay './express/cors'-only).
+      'verifyWebhookSignature', 'createWebhookVerifier',
+      'resolveCorsPolicy', 'normalizeOrigin',
     ].filter((n) => typeof mod[n] !== 'function');
     if (missing.length) {
       console.error('CJS missing exports: ' + missing.join(', '));
@@ -194,9 +199,12 @@ try {
       console.error('CJS: ./cors subpath missing resolveCorsPolicy');
       process.exit(10);
     }
-    // resolveCorsPolicy must NOT leak from the main entry or './core'.
-    if ('resolveCorsPolicy' in mod) {
-      console.error('CJS: resolveCorsPolicy should not be exported from main entry');
+    // v1.2.1: resolveCorsPolicy/normalizeOrigin are now ALSO on the main
+    // entry (purely additive — the './cors' subpath above is unchanged).
+    // They still must NOT leak from './core' (that barrel only carries the
+    // Phase-1 core carve).
+    if (typeof mod.resolveCorsPolicy !== 'function') {
+      console.error('CJS: resolveCorsPolicy missing from main entry (v1.2.1 root re-export)');
       process.exit(11);
     }
     if ('resolveCorsPolicy' in core) {
@@ -210,6 +218,9 @@ try {
       console.error('CJS: ./express/cors subpath missing corsOptions (with cors peer absent)');
       process.exit(13);
     }
+    // v1.2.1: corsOptions deliberately STAYS OFF the main entry (see
+    // src/index.ts) — its return type requires the 'cors' package's types,
+    // which would force @types/cors onto every root consumer.
     if ('corsOptions' in mod) {
       console.error('CJS: corsOptions should not be exported from main entry');
       process.exit(14);
@@ -222,8 +233,9 @@ try {
       console.error('CJS: ./webhook subpath missing verifyWebhookSignature (no optional peers present)');
       process.exit(15);
     }
-    if ('verifyWebhookSignature' in mod) {
-      console.error('CJS: verifyWebhookSignature should not be exported from main entry');
+    // v1.2.1: verifyWebhookSignature is now ALSO on the main entry.
+    if (typeof mod.verifyWebhookSignature !== 'function') {
+      console.error('CJS: verifyWebhookSignature missing from main entry (v1.2.1 root re-export)');
       process.exit(16);
     }
     if ('verifyWebhookSignature' in core) {
@@ -236,8 +248,9 @@ try {
       console.error('CJS: ./express/webhook subpath missing createWebhookVerifier');
       process.exit(18);
     }
-    if ('createWebhookVerifier' in mod) {
-      console.error('CJS: createWebhookVerifier should not be exported from main entry');
+    // v1.2.1: createWebhookVerifier is now ALSO on the main entry.
+    if (typeof mod.createWebhookVerifier !== 'function') {
+      console.error('CJS: createWebhookVerifier missing from main entry (v1.2.1 root re-export)');
       process.exit(19);
     }
     console.log('CJS OK');
@@ -271,7 +284,12 @@ try {
       auditFailureHook, auditRateLimitHook, auditDeniedHook,
       ipKey as rootIpKey, verifiedIdentityKey as rootVerifiedIdentityKey,
       defaultKeyGenerator as rootDefaultKeyGenerator, decodedJwtKey as rootDecodedJwtKey,
+      verifyWebhookSignature as rootVerifyWebhookSignature,
+      createWebhookVerifier as rootCreateWebhookVerifier,
+      resolveCorsPolicy as rootResolveCorsPolicy,
+      normalizeOrigin as rootNormalizeOrigin,
     } from '${pkg.name}';
+    import { normalizeOrigin } from '${pkg.name}/cors';
     import * as rootMod from '${pkg.name}';
     import { RedisRateLimitStore } from '${pkg.name}/redis-store';
     import { RedisNonceStore } from '${pkg.name}/nonce-redis';
@@ -297,6 +315,8 @@ try {
       AuditBuffer, buildAuditEvent, ConsoleAuditSink,
       auditFailureHook, auditRateLimitHook, auditDeniedHook,
       rootIpKey, rootVerifiedIdentityKey, rootDefaultKeyGenerator, rootDecodedJwtKey,
+      rootVerifyWebhookSignature, rootCreateWebhookVerifier,
+      rootResolveCorsPolicy, rootNormalizeOrigin,
       coreVerifyApiKey, extractRawKey, coreSha256Hasher, scopedHmacHasher,
       coreTimingSafeEqualHex, MemoryRateLimitStore, ipKey, verifiedIdentityKey,
       defaultKeyGenerator, decodedJwtKey, coreBuildCanonicalString, coreSignRequest, sha256Hex,
@@ -343,18 +363,31 @@ try {
       console.error('ESM: resolveCorsPolicy subpath import failed (cors peer absent)');
       process.exit(10);
     }
+    if (typeof normalizeOrigin !== 'function') {
+      console.error('ESM: normalizeOrigin subpath import failed (cors peer absent)');
+      process.exit(20);
+    }
     if (typeof corsOptions !== 'function') {
       console.error('ESM: corsOptions subpath import failed (cors peer absent)');
       process.exit(13);
     }
-    if ('resolveCorsPolicy' in rootMod) {
-      console.error('ESM: resolveCorsPolicy should not be exported from main entry');
+    // v1.2.1: resolveCorsPolicy/normalizeOrigin/corsOptions are now ALSO on
+    // the main entry (purely additive — the subpaths above are unchanged).
+    // They still must NOT leak from './core' (Phase-1 core carve only).
+    if (typeof rootResolveCorsPolicy !== 'function') {
+      console.error('ESM: resolveCorsPolicy missing from main entry (v1.2.1 root re-export)');
       process.exit(11);
+    }
+    if (typeof rootNormalizeOrigin !== 'function') {
+      console.error('ESM: normalizeOrigin missing from main entry (v1.2.1 root re-export)');
+      process.exit(21);
     }
     if ('resolveCorsPolicy' in coreMod) {
       console.error('ESM: resolveCorsPolicy should not be exported from ./core');
       process.exit(12);
     }
+    // v1.2.1: corsOptions deliberately STAYS OFF the main entry (see
+    // src/index.ts) — its return type requires the 'cors' package's types.
     if ('corsOptions' in rootMod) {
       console.error('ESM: corsOptions should not be exported from main entry');
       process.exit(14);
@@ -371,16 +404,18 @@ try {
       console.error('ESM: createWebhookVerifier subpath import failed');
       process.exit(18);
     }
-    if ('verifyWebhookSignature' in rootMod) {
-      console.error('ESM: verifyWebhookSignature should not be exported from main entry');
+    // v1.2.1: verifyWebhookSignature/createWebhookVerifier are now ALSO on
+    // the main entry.
+    if (typeof rootVerifyWebhookSignature !== 'function') {
+      console.error('ESM: verifyWebhookSignature missing from main entry (v1.2.1 root re-export)');
       process.exit(16);
     }
     if ('verifyWebhookSignature' in coreMod) {
       console.error('ESM: verifyWebhookSignature should not be exported from ./core');
       process.exit(17);
     }
-    if ('createWebhookVerifier' in rootMod) {
-      console.error('ESM: createWebhookVerifier should not be exported from main entry');
+    if (typeof rootCreateWebhookVerifier !== 'function') {
+      console.error('ESM: createWebhookVerifier missing from main entry (v1.2.1 root re-export)');
       process.exit(19);
     }
     console.log('ESM OK');

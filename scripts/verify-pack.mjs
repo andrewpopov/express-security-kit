@@ -55,6 +55,12 @@ try {
   if (!existsSync(join(pkgRoot, 'dist', 'express', 'cors', 'corsOptions.d.ts'))) {
     fail('dist/express/cors/corsOptions.d.ts is missing after build');
   }
+  if (!existsSync(join(pkgRoot, 'dist', 'core', 'webhook', 'verify.d.ts'))) {
+    fail('dist/core/webhook/verify.d.ts is missing after build');
+  }
+  if (!existsSync(join(pkgRoot, 'dist', 'express', 'webhook', 'createWebhookVerifier.d.ts'))) {
+    fail('dist/express/webhook/createWebhookVerifier.d.ts is missing after build');
+  }
 
   console.log('[verify:pack] Packing tarball...');
   const packOut = run('npm', ['pack', '--json', '--pack-destination', workDir], {
@@ -81,10 +87,17 @@ try {
   if (!contents.includes('package/dist/express/cors/corsOptions.d.ts')) {
     fail('dist/express/cors/corsOptions.d.ts is not present in the packed tarball');
   }
+  if (!contents.includes('package/dist/core/webhook/verify.d.ts')) {
+    fail('dist/core/webhook/verify.d.ts is not present in the packed tarball');
+  }
+  if (!contents.includes('package/dist/express/webhook/createWebhookVerifier.d.ts')) {
+    fail('dist/express/webhook/createWebhookVerifier.d.ts is not present in the packed tarball');
+  }
   console.log(
     '[verify:pack] OK: dist/index.d.ts, dist/core/index.d.ts, ' +
-      'dist/core/signing/nonce-redis.d.ts, dist/core/cors/policy.d.ts, and ' +
-      'dist/express/cors/corsOptions.d.ts ship in tarball',
+      'dist/core/signing/nonce-redis.d.ts, dist/core/cors/policy.d.ts, ' +
+      'dist/express/cors/corsOptions.d.ts, dist/core/webhook/verify.d.ts, and ' +
+      'dist/express/webhook/createWebhookVerifier.d.ts ship in tarball',
   );
 
   // Set up a throwaway consumer project and install the tarball.
@@ -201,6 +214,32 @@ try {
       console.error('CJS: corsOptions should not be exported from main entry');
       process.exit(14);
     }
+    // './webhook' subpath: framework-agnostic signature verifier. Same
+    // absent-'cors'/'ioredis'-peer consumer — verifyWebhookSignature never
+    // imports either, so it must load with no optional peers present.
+    const webhook = require('${pkg.name}/webhook');
+    if (typeof webhook.verifyWebhookSignature !== 'function') {
+      console.error('CJS: ./webhook subpath missing verifyWebhookSignature (no optional peers present)');
+      process.exit(15);
+    }
+    if ('verifyWebhookSignature' in mod) {
+      console.error('CJS: verifyWebhookSignature should not be exported from main entry');
+      process.exit(16);
+    }
+    if ('verifyWebhookSignature' in core) {
+      console.error('CJS: verifyWebhookSignature should not be exported from ./core');
+      process.exit(17);
+    }
+    // './express/webhook' subpath: the middleware wrapper.
+    const expressWebhook = require('${pkg.name}/express/webhook');
+    if (typeof expressWebhook.createWebhookVerifier !== 'function') {
+      console.error('CJS: ./express/webhook subpath missing createWebhookVerifier');
+      process.exit(18);
+    }
+    if ('createWebhookVerifier' in mod) {
+      console.error('CJS: createWebhookVerifier should not be exported from main entry');
+      process.exit(19);
+    }
     console.log('CJS OK');
   `;
   writeFileSync(join(consumerDir, 'smoke.cjs'), cjsSmoke);
@@ -238,6 +277,8 @@ try {
     import { RedisNonceStore } from '${pkg.name}/nonce-redis';
     import { resolveCorsPolicy } from '${pkg.name}/cors';
     import { corsOptions } from '${pkg.name}/express/cors';
+    import { verifyWebhookSignature } from '${pkg.name}/webhook';
+    import { createWebhookVerifier } from '${pkg.name}/express/webhook';
     import {
       verifyApiKey as coreVerifyApiKey, extractRawKey, sha256Hasher as coreSha256Hasher,
       scopedHmacHasher, timingSafeEqualHex as coreTimingSafeEqualHex, MemoryRateLimitStore,
@@ -317,6 +358,30 @@ try {
     if ('corsOptions' in rootMod) {
       console.error('ESM: corsOptions should not be exported from main entry');
       process.exit(14);
+    }
+    // './webhook' and './express/webhook' ESM named imports resolve — same
+    // absent-'cors'/'ioredis'-peer consumer, proving the pure-core verifier
+    // (and the express wrapper, which only imports 'express' as a type) load
+    // fine with no optional peers installed.
+    if (typeof verifyWebhookSignature !== 'function') {
+      console.error('ESM: verifyWebhookSignature subpath import failed (no optional peers present)');
+      process.exit(15);
+    }
+    if (typeof createWebhookVerifier !== 'function') {
+      console.error('ESM: createWebhookVerifier subpath import failed');
+      process.exit(18);
+    }
+    if ('verifyWebhookSignature' in rootMod) {
+      console.error('ESM: verifyWebhookSignature should not be exported from main entry');
+      process.exit(16);
+    }
+    if ('verifyWebhookSignature' in coreMod) {
+      console.error('ESM: verifyWebhookSignature should not be exported from ./core');
+      process.exit(17);
+    }
+    if ('createWebhookVerifier' in rootMod) {
+      console.error('ESM: createWebhookVerifier should not be exported from main entry');
+      process.exit(19);
     }
     console.log('ESM OK');
   `;

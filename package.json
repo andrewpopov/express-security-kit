@@ -30,6 +30,14 @@
     "./express/cors": {
       "types": "./dist/express/cors/corsOptions.d.ts",
       "default": "./dist/express/cors/corsOptions.js"
+    },
+    "./webhook": {
+      "types": "./dist/core/webhook/verify.d.ts",
+      "default": "./dist/core/webhook/verify.js"
+    },
+    "./express/webhook": {
+      "types": "./dist/express/webhook/createWebhookVerifier.d.ts",
+      "default": "./dist/express/webhook/createWebhookVerifier.js"
     }
   },
   "files": [

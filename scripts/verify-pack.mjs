@@ -99,6 +99,7 @@ try {
       'buildCanonicalString', 'MemoryNonceStore',
       'AuditBuffer', 'buildAuditEvent', 'ConsoleAuditSink',
       'auditFailureHook', 'auditRateLimitHook', 'auditDeniedHook',
+      'ipKey', 'verifiedIdentityKey', 'defaultKeyGenerator', 'decodedJwtKey',
     ].filter((n) => typeof mod[n] !== 'function');
     if (missing.length) {
       console.error('CJS missing exports: ' + missing.join(', '));
@@ -123,6 +124,7 @@ try {
       'defaultKeyGenerator', 'decodedJwtKey', 'buildCanonicalString', 'signRequest',
       'sha256Hex', 'MemoryNonceStore', 'AuditBuffer', 'buildAuditEvent',
       'ConsoleAuditSink', 'auditFailureHook', 'auditRateLimitHook', 'auditDeniedHook',
+      'buildDefaultContext',
     ].filter((n) => typeof core[n] !== 'function');
     if (coreMissing.length) {
       console.error('CJS ./core missing exports: ' + coreMissing.join(', '));
@@ -162,6 +164,8 @@ try {
       createRequestSigningVerifier, signRequest, buildCanonicalString, MemoryNonceStore,
       AuditBuffer, buildAuditEvent, ConsoleAuditSink,
       auditFailureHook, auditRateLimitHook, auditDeniedHook,
+      ipKey as rootIpKey, verifiedIdentityKey as rootVerifiedIdentityKey,
+      defaultKeyGenerator as rootDefaultKeyGenerator, decodedJwtKey as rootDecodedJwtKey,
     } from '${pkg.name}';
     import * as rootMod from '${pkg.name}';
     import { RedisRateLimitStore } from '${pkg.name}/redis-store';
@@ -173,7 +177,7 @@ try {
       MemoryNonceStore as CoreMemoryNonceStore, AuditBuffer as CoreAuditBuffer,
       buildAuditEvent as coreBuildAuditEvent, ConsoleAuditSink as CoreConsoleAuditSink,
       auditFailureHook as coreAuditFailureHook, auditRateLimitHook as coreAuditRateLimitHook,
-      auditDeniedHook as coreAuditDeniedHook,
+      auditDeniedHook as coreAuditDeniedHook, buildDefaultContext as coreBuildDefaultContext,
     } from '${pkg.name}/core';
     import * as coreMod from '${pkg.name}/core';
     const fns = {
@@ -182,11 +186,12 @@ try {
       createRequestSigningVerifier, signRequest, buildCanonicalString, MemoryNonceStore,
       AuditBuffer, buildAuditEvent, ConsoleAuditSink,
       auditFailureHook, auditRateLimitHook, auditDeniedHook,
+      rootIpKey, rootVerifiedIdentityKey, rootDefaultKeyGenerator, rootDecodedJwtKey,
       coreVerifyApiKey, extractRawKey, coreSha256Hasher, scopedHmacHasher,
       coreTimingSafeEqualHex, MemoryRateLimitStore, ipKey, verifiedIdentityKey,
       defaultKeyGenerator, decodedJwtKey, coreBuildCanonicalString, coreSignRequest, sha256Hex,
       CoreMemoryNonceStore, CoreAuditBuffer, coreBuildAuditEvent, CoreConsoleAuditSink,
-      coreAuditFailureHook, coreAuditRateLimitHook, coreAuditDeniedHook,
+      coreAuditFailureHook, coreAuditRateLimitHook, coreAuditDeniedHook, coreBuildDefaultContext,
     };
     for (const [name, fn] of Object.entries(fns)) {
       if (typeof fn !== 'function') {
@@ -213,6 +218,69 @@ try {
   const esmOut = run('node', ['smoke.mjs'], { cwd: consumerDir });
   if (!esmOut.includes('ESM OK')) fail('ESM smoke did not report OK');
   console.log('[verify:pack] OK: ESM named imports resolve');
+
+  // 5. TypeScript consumer type-check: assert the ambient Express
+  //    augmentation (req.securityContext / req.rawBody) is visible to a
+  //    consumer that imports the ROOT package, and that the introspection
+  //    surfaces (verifyApiKey, auditFailureHook) stay pinned to express
+  //    `Request` rather than the generic `SecurityRequest`.
+  console.log('[verify:pack] Installing TypeScript + express types into consumer...');
+  run(
+    'npm',
+    ['install', '--no-audit', '--no-fund', '--save-dev', 'typescript', '@types/express'],
+    { cwd: consumerDir, stdio: 'inherit' },
+  );
+
+  const tsFixture = `
+    import '${pkg.name}';
+    import { verifyApiKey, auditFailureHook } from '${pkg.name}';
+    import type { Request } from 'express';
+
+    declare const req: Request;
+
+    // Ambient augmentation: securityContext / rawBody must be visible on
+    // express.Request once the root package is imported.
+    const principalId: string | undefined = req.securityContext?.principalId;
+    const rawBody: string | Buffer | undefined = req.rawBody;
+    void principalId;
+    void rawBody;
+
+    // Introspection stays Request-pinned: these param types must be
+    // assignable from a plain express.Request.
+    type VerifyApiKeyReqParam = Parameters<typeof verifyApiKey>[1];
+    type AuditFailureReqParam = Parameters<ReturnType<typeof auditFailureHook>>[0];
+    const asVerifyApiKeyReq: VerifyApiKeyReqParam = req;
+    const asAuditFailureReq: AuditFailureReqParam = req;
+    void asVerifyApiKeyReq;
+    void asAuditFailureReq;
+  `;
+  writeFileSync(join(consumerDir, 'fixture.ts'), tsFixture);
+
+  const tsconfig = {
+    compilerOptions: {
+      strict: true,
+      module: 'node16',
+      moduleResolution: 'node16',
+      target: 'es2022',
+      skipLibCheck: false,
+      noEmit: true,
+    },
+    include: ['fixture.ts'],
+  };
+  writeFileSync(join(consumerDir, 'tsconfig.json'), JSON.stringify(tsconfig, null, 2));
+
+  console.log('[verify:pack] Type-checking consumer fixture against packed types...');
+  const tscBin = join(consumerDir, 'node_modules', '.bin', 'tsc');
+  try {
+    run(tscBin, ['-p', 'tsconfig.json'], { cwd: consumerDir });
+  } catch (err) {
+    const output = [err.stdout, err.stderr].filter(Boolean).join('\n');
+    fail(`consumer TypeScript compile failed:\n${output}`);
+  }
+  console.log(
+    '[verify:pack] OK: consumer TypeScript compile succeeds ' +
+      '(ambient augmentation + Request-pinned introspection)',
+  );
 
   console.log('\n[verify:pack] PASS: all checks green');
 } finally {

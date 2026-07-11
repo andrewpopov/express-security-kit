@@ -26,8 +26,6 @@ export type HeaderReader = (name: string) => string | undefined;
 export type SecretResolver = (headers: HeaderReader) => string | undefined | Promise<string | undefined>;
 /** Resolves the ed25519 public key (hex). May be async; absence -> `missing_public_key`. */
 export type PublicKeyResolver = (headers: HeaderReader) => string | undefined | Promise<string | undefined>;
-/** Resolves the replay-protection scope. May be async. */
-export type ReplayScopeResolver = (headers: HeaderReader) => string | Promise<string>;
 /**
  * Extract an application-level replay id from the (already-verified) body.
  * Because the body is covered by the signature, an id pulled from it is
@@ -42,8 +40,21 @@ export type ReplayIdFromVerifiedBody = (body: string | Buffer) => string | undef
 export interface ReplayConfig {
     /** Durable (ideally cross-instance) nonce store. A throw from `consume()` -> `store_unavailable`, never `replay`. */
     store: NonceStore;
-    /** Replay scope/namespace (e.g. a webhook source name). */
-    scope: string | ReplayScopeResolver;
+    /**
+     * Replay scope/namespace (e.g. a webhook source name) — a STATIC string,
+     * fixed at configuration time.
+     *
+     * Deliberately NOT resolvable from the request (no `(headers) => string`
+     * form): headers are unauthenticated until the signature check below has
+     * run, and an attacker can freely vary any header while replaying a
+     * previously-valid (body, signature) pair. A scope derived from such a
+     * header would hand that replay a fresh nonce namespace on every attempt —
+     * defeating replay protection entirely (C2). If per-source namespacing is
+     * needed, configure one verifier instance per scope (e.g. one
+     * `WebhookVerifyConfig` per webhook source) rather than branching scope off
+     * request data.
+     */
+    scope: string;
     /** Nonce TTL in ms. Must be > 0 (enforced by the store; a store throw on an invalid ttlMs surfaces as `store_unavailable`). */
     ttlMs: number;
     /**
@@ -98,7 +109,7 @@ export interface WebhookVerifyInput {
     headers: WebhookHeaders;
     config: WebhookVerifyConfig;
 }
-export type WebhookVerifyReason = 'missing_secret' | 'missing_public_key' | 'missing_signature' | 'bad_signature' | 'missing_body' | 'missing_timestamp' | 'invalid_timestamp' | 'stale_timestamp' | 'missing_replay_id' | 'replay' | 'store_unavailable';
+export type WebhookVerifyReason = 'missing_secret' | 'missing_public_key' | 'missing_signature' | 'bad_signature' | 'missing_body' | 'missing_timestamp' | 'invalid_timestamp' | 'stale_timestamp' | 'missing_replay_id' | 'replay' | 'store_unavailable' | 'invalid_config';
 export type WebhookVerifyOutcome = {
     ok: true;
 } | {

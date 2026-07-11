@@ -30,9 +30,18 @@ export interface CorsOptionsConfig extends CorsPolicyConfig {
  * The core policy is resolved ONCE here, at construction — so a
  * production-empty allowlist throws at BOOT (fail closed), not on the first
  * request. The `origin` callback is fixed by this module and always calls
- * `callback(null, true | false)`; it never reflects the incoming origin
- * string and is not part of {@link CorsOptionsConfig}, so no consumer
- * override can replace it. Every other option is an overridable, purely
- * non-security default (methods/headers/credentials/maxAge/status).
+ * `callback(null, <canonical string> | boolean)`; it is not part of
+ * {@link CorsOptionsConfig}, so no consumer override can replace it. Every
+ * other option is an overridable, purely non-security default
+ * (methods/headers/credentials/maxAge/status).
+ *
+ * IMPORTANT: for an allowed origin this calls back with the CANONICAL
+ * allowlist string (via {@link CorsPolicy.resolveAllowedOrigin}), never
+ * `true` and never the raw incoming `Origin` header. `callback(null, true)`
+ * would make the `cors` package REFLECT the raw request Origin verbatim into
+ * `Access-Control-Allow-Origin` — since request headers are attacker-
+ * controlled, that would echo back arbitrary bytes for any origin string
+ * that merely *normalizes* to an allowed one, rather than emitting the fixed
+ * value the allowlist actually authorizes.
  */
 export declare function corsOptions(config: CorsOptionsConfig): CorsOptions;

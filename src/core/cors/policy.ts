@@ -43,6 +43,15 @@ export interface CorsPolicy {
    * subdomain/suffix.
    */
   allow(origin: string | undefined): boolean;
+  /**
+   * `origin === undefined` → `allowNoOrigin` (the boolean). An allowed origin
+   * → the CANONICAL, normalized allowlist string — i.e. the value stored in
+   * `origins`, never the raw incoming value — so a caller that emits this
+   * result verbatim (e.g. as an `Access-Control-Allow-Origin` header) never
+   * reflects attacker-controlled bytes. A denied origin → `false`, and
+   * `onReject` is still invoked exactly as `allow()` does.
+   */
+  resolveAllowedOrigin(origin: string | undefined): string | boolean;
   /** The resolved, normalized, de-duplicated allowlist. */
   origins: readonly string[];
   allowNoOrigin: boolean;
@@ -129,6 +138,14 @@ export function resolveCorsPolicy(config: CorsPolicyConfig): CorsPolicy {
     }
   }
 
+  function normalizeIncoming(origin: string): string | null {
+    try {
+      return normalizeOrigin(origin);
+    } catch {
+      return null;
+    }
+  }
+
   return {
     origins,
     allowNoOrigin,
@@ -136,14 +153,24 @@ export function resolveCorsPolicy(config: CorsPolicyConfig): CorsPolicy {
       if (origin === undefined) {
         return allowNoOrigin;
       }
-      let normalized: string | null;
-      try {
-        normalized = normalizeOrigin(origin);
-      } catch {
-        normalized = null;
-      }
+      const normalized = normalizeIncoming(origin);
       if (normalized !== null && set.has(normalized)) {
         return true;
+      }
+      safeOnReject(origin);
+      return false;
+    },
+    resolveAllowedOrigin(origin: string | undefined): string | boolean {
+      if (origin === undefined) {
+        return allowNoOrigin;
+      }
+      const normalized = normalizeIncoming(origin);
+      if (normalized !== null && set.has(normalized)) {
+        // `normalized` IS the canonical form: normalization is deterministic,
+        // so the incoming origin's canonicalized value is byte-identical to
+        // the allowlist entry it matched — never the raw, attacker-supplied
+        // input (which may differ in path/case/port/scheme formatting).
+        return normalized;
       }
       safeOnReject(origin);
       return false;

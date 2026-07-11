@@ -169,6 +169,59 @@ describe('resolveCorsPolicy — allowNoOrigin', () => {
   });
 });
 
+describe('resolveCorsPolicy — resolveAllowedOrigin (FIX 4)', () => {
+  it('returns the CANONICAL normalized allowlist string for an allowed non-canonical input, not the raw input', () => {
+    const policy = resolveCorsPolicy({
+      env: 'production',
+      origins: ['https://app.example.com'],
+    });
+    // Raw input has a path + default port variance the allowlist entry does
+    // not — normalization must produce the exact canonical form, not the
+    // raw bytes the caller supplied.
+    expect(policy.resolveAllowedOrigin('https://app.example.com:443/some/path')).toBe(
+      'https://app.example.com',
+    );
+  });
+
+  it('returns false for a denied origin, and still invokes onReject', () => {
+    const onReject = vi.fn();
+    const policy = resolveCorsPolicy({
+      env: 'production',
+      origins: ['https://app.example.com'],
+      onReject,
+    });
+    expect(policy.resolveAllowedOrigin('https://evil.com')).toBe(false);
+    expect(onReject).toHaveBeenCalledWith('https://evil.com');
+  });
+
+  it('returns the allowNoOrigin boolean for an undefined origin', () => {
+    const allowed = resolveCorsPolicy({
+      env: 'production',
+      origins: ['https://app.example.com'],
+      allowNoOrigin: true,
+    });
+    expect(allowed.resolveAllowedOrigin(undefined)).toBe(true);
+
+    const denied = resolveCorsPolicy({
+      env: 'production',
+      origins: ['https://app.example.com'],
+      allowNoOrigin: false,
+    });
+    expect(denied.resolveAllowedOrigin(undefined)).toBe(false);
+  });
+
+  it('never returns the raw attacker-controlled origin string, even when it happens to normalize to an allowed value', () => {
+    const policy = resolveCorsPolicy({
+      env: 'production',
+      origins: ['https://App.Example.com:443'],
+    });
+    const raw = 'https://APP.EXAMPLE.COM:443/x?y=1';
+    const result = policy.resolveAllowedOrigin(raw);
+    expect(result).not.toBe(raw);
+    expect(result).toBe('https://app.example.com');
+  });
+});
+
 describe('resolveCorsPolicy — onReject hook', () => {
   it('is called with the rejected origin on deny', () => {
     const onReject = vi.fn();

@@ -372,6 +372,82 @@ describe('verifyWebhookSignature — ed25519', () => {
     const empty = await verifyWebhookSignature({ rawBody: '', headers, config: ed25519Config() });
     expect(empty).toEqual({ ok: true });
   });
+
+  describe('FIX 3: freshness config fails closed on non-finite values', () => {
+    it('maxSkewSeconds: NaN -> invalid_config, not ok', async () => {
+      const body = '{"type":1}';
+      const ts = String(nowSeconds());
+      const headers: WebhookHeaders = {
+        'x-signature-ed25519': ed25519Sign(ts, body),
+        'x-signature-timestamp': ts,
+      };
+      const outcome = await verifyWebhookSignature({
+        rawBody: body,
+        headers,
+        config: ed25519Config({
+          timestamp: { header: 'x-signature-timestamp', maxSkewSeconds: NaN, now: () => nowMs },
+        }),
+      });
+      expect(outcome).toEqual({ ok: false, reason: 'invalid_config' });
+    });
+
+    it('maxSkewSeconds: Infinity -> invalid_config, not ok', async () => {
+      const body = '{"type":1}';
+      const ts = String(nowSeconds());
+      const headers: WebhookHeaders = {
+        'x-signature-ed25519': ed25519Sign(ts, body),
+        'x-signature-timestamp': ts,
+      };
+      const outcome = await verifyWebhookSignature({
+        rawBody: body,
+        headers,
+        config: ed25519Config({
+          timestamp: { header: 'x-signature-timestamp', maxSkewSeconds: Infinity, now: () => nowMs },
+        }),
+      });
+      expect(outcome).toEqual({ ok: false, reason: 'invalid_config' });
+    });
+
+    it('maxSkewSeconds: negative -> invalid_config, not ok', async () => {
+      const body = '{"type":1}';
+      const ts = String(nowSeconds());
+      const headers: WebhookHeaders = {
+        'x-signature-ed25519': ed25519Sign(ts, body),
+        'x-signature-timestamp': ts,
+      };
+      const outcome = await verifyWebhookSignature({
+        rawBody: body,
+        headers,
+        config: ed25519Config({
+          timestamp: { header: 'x-signature-timestamp', maxSkewSeconds: -1, now: () => nowMs },
+        }),
+      });
+      expect(outcome).toEqual({ ok: false, reason: 'invalid_config' });
+    });
+
+    it('now(): NaN -> invalid_config/fail-closed — an old signed request must NOT verify ok', async () => {
+      // A stale (far in the past) but validly-signed timestamp. If a broken
+      // clock (`now()` returning NaN) were NOT fail-closed, `skewSeconds`
+      // would be NaN, and `NaN > maxSkewSeconds` is always `false` — so the
+      // stale request would sail through as fresh. It must instead fail
+      // closed on the broken config, never verify ok.
+      const body = '{"type":1}';
+      const staleTs = String(nowSeconds() - 10_000);
+      const headers: WebhookHeaders = {
+        'x-signature-ed25519': ed25519Sign(staleTs, body),
+        'x-signature-timestamp': staleTs,
+      };
+      const outcome = await verifyWebhookSignature({
+        rawBody: body,
+        headers,
+        config: ed25519Config({
+          timestamp: { header: 'x-signature-timestamp', maxSkewSeconds: 300, now: () => NaN },
+        }),
+      });
+      expect(outcome).toEqual({ ok: false, reason: 'invalid_config' });
+      expect(outcome).not.toEqual({ ok: true });
+    });
+  });
 });
 
 // ===========================================================================
@@ -480,12 +556,135 @@ describe('verifyWebhookSignature — replay protection (hmac-sha256)', () => {
     store.dispose();
   });
 
-  it('supports an async scope resolver', async () => {
+  it('FIX 1 (runtime, load-bearing): even if a caller bypasses the type system and supplies a function as scope, it is NEVER invoked as a resolver', async () => {
+    // `ReplayConfig.scope` is typed as a plain `string` (no more
+    // `ReplayScopeResolver`), so a well-typed caller cannot pass a function.
+    // This test proves the RUNTIME no longer special-cases a function value
+    // either: `consumeReplay` must use `replay.scope` as an opaque value
+    // handed straight to the store, never calling it. A function that throws
+    // when invoked makes this observable — the old vulnerable code path
+    // (`typeof replay.scope === 'function' ? await replay.scope(headers) :
+    // replay.scope`) would call it, the throw would be caught, and the
+    // outcome would be `store_unavailable`; the fixed code never calls it,
+    // so verification proceeds to a normal `ok`.
+    const store = new MemoryNonceStore();
+    const scopeFn = vi.fn(() => {
+      throw new Error('scope resolver must never be called');
+    });
+    const body = '{}';
+    const config = withReplay(store, { scope: scopeFn as unknown as string });
+    const outcome = await verifyWebhookSignature({
+      rawBody: body,
+      headers: { 'x-hub-signature-256': hmacSign(body) },
+      config,
+    });
+    expect(scopeFn).not.toHaveBeenCalled();
+    expect(outcome).toEqual({ ok: true });
+    store.dispose();
+  });
+
+  it('FIX 1: consume() is always called with the exact configured static scope string, never a value derived from headers', async () => {
     const { store, consume } = spyStore();
     const body = '{}';
-    const config = withReplay(store, { scope: async () => 'resolved-scope' });
-    await verifyWebhookSignature({ rawBody: body, headers: { 'x-hub-signature-256': hmacSign(body) }, config });
-    expect(consume).toHaveBeenCalledWith('resolved-scope', expect.any(String), 60_000);
+    const config = withReplay(store, { scope: 'static-scope' });
+    await verifyWebhookSignature({
+      rawBody: body,
+      headers: { 'x-hub-signature-256': hmacSign(body), 'x-tenant-id': 'tenant-a' },
+      config,
+    });
+    expect(consume).toHaveBeenCalledWith('static-scope', expect.any(String), 60_000);
+  });
+
+  it('FIX 1: replaying a valid (body, signature) while rotating an unauthenticated header still replays under one static scope', async () => {
+    // This is the exact attack the fix closes: previously a `(headers) =>
+    // ...` scope resolver could derive a fresh namespace per request by
+    // varying an arbitrary unauthenticated header (e.g. x-tenant-id),
+    // letting the SAME valid (body, signature) pair be "replayed" forever
+    // because each attempt landed in a different nonce scope. With a static
+    // scope there is exactly one namespace, so the second delivery — even
+    // with a rotated header — is caught.
+    const store = new MemoryNonceStore();
+    const body = '{"event":"push"}';
+    const config = withReplay(store, { scope: 'single-static-scope' });
+
+    const first = await verifyWebhookSignature({
+      rawBody: body,
+      headers: { 'x-hub-signature-256': hmacSign(body), 'x-tenant-id': 'tenant-a' },
+      config,
+    });
+    const second = await verifyWebhookSignature({
+      rawBody: body,
+      headers: { 'x-hub-signature-256': hmacSign(body), 'x-tenant-id': 'tenant-b' },
+      config,
+    });
+    expect(first).toEqual({ ok: true });
+    expect(second).toEqual({ ok: false, reason: 'replay' });
+    store.dispose();
+  });
+});
+
+describe('verifyWebhookSignature — replay protection: store result must be EXACTLY "ok" (FIX 2)', () => {
+  function withReplay(store: NonceStore, overrides: Partial<ReplayConfig> = {}): HmacSha256Config {
+    return hmacConfig({ replay: { store, scope: 'gh-webhook', ttlMs: 60_000, ...overrides } });
+  }
+
+  function fakeStoreResolving(value: unknown): NonceStore {
+    return { consume: vi.fn(async () => value as 'ok' | 'replay') };
+  }
+
+  it('consume() resolving undefined -> store_unavailable, NOT ok and NOT replay', async () => {
+    const body = '{"event":"push"}';
+    const config = withReplay(fakeStoreResolving(undefined));
+    const outcome = await verifyWebhookSignature({
+      rawBody: body,
+      headers: { 'x-hub-signature-256': hmacSign(body) },
+      config,
+    });
+    expect(outcome).toEqual({ ok: false, reason: 'store_unavailable' });
+  });
+
+  it('consume() resolving "OK" (wrong case) -> store_unavailable, NOT ok and NOT replay', async () => {
+    const body = '{"event":"push"}';
+    const config = withReplay(fakeStoreResolving('OK'));
+    const outcome = await verifyWebhookSignature({
+      rawBody: body,
+      headers: { 'x-hub-signature-256': hmacSign(body) },
+      config,
+    });
+    expect(outcome).toEqual({ ok: false, reason: 'store_unavailable' });
+  });
+
+  it('consume() resolving null -> store_unavailable, NOT ok and NOT replay', async () => {
+    const body = '{"event":"push"}';
+    const config = withReplay(fakeStoreResolving(null));
+    const outcome = await verifyWebhookSignature({
+      rawBody: body,
+      headers: { 'x-hub-signature-256': hmacSign(body) },
+      config,
+    });
+    expect(outcome).toEqual({ ok: false, reason: 'store_unavailable' });
+  });
+
+  it('consume() resolving the exact string "ok" still verifies ok (control case)', async () => {
+    const body = '{"event":"push"}';
+    const config = withReplay(fakeStoreResolving('ok'));
+    const outcome = await verifyWebhookSignature({
+      rawBody: body,
+      headers: { 'x-hub-signature-256': hmacSign(body) },
+      config,
+    });
+    expect(outcome).toEqual({ ok: true });
+  });
+
+  it('consume() resolving "replay" still reports replay (control case)', async () => {
+    const body = '{"event":"push"}';
+    const config = withReplay(fakeStoreResolving('replay'));
+    const outcome = await verifyWebhookSignature({
+      rawBody: body,
+      headers: { 'x-hub-signature-256': hmacSign(body) },
+      config,
+    });
+    expect(outcome).toEqual({ ok: false, reason: 'replay' });
   });
 });
 

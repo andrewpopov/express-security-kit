@@ -78,30 +78,27 @@ function toBuffer(body) {
 const HEX_CHARS_EVEN_LENGTH = /^(?:[0-9a-fA-F]{2})+$/;
 /**
  * Run the replay-protection step shared by both schemes: derive the
- * (authenticated) replay id, resolve the scope, and atomically consume it.
- * Only ever reached AFTER the signature has been verified (C4) — callers
- * must not invoke this earlier.
+ * (authenticated) replay id and atomically consume it under the configured
+ * (static) scope. Only ever reached AFTER the signature has been verified
+ * (C4) — callers must not invoke this earlier.
  */
-async function consumeReplay(replay, headers, rawBody, defaultReplayId) {
+async function consumeReplay(replay, rawBody, defaultReplayId) {
     const replayId = replay.idFromVerifiedBody
         ? replay.idFromVerifiedBody(rawBody)
         : defaultReplayId;
     if (!replayId) {
         return fail('missing_replay_id');
     }
-    let scope;
     try {
-        scope = typeof replay.scope === 'function' ? await replay.scope(headers) : replay.scope;
-    }
-    catch {
-        // A throwing scope resolver leaves replay protection unusable — fail
-        // closed exactly like a store outage, never silently skip the check.
-        return fail('store_unavailable');
-    }
-    try {
-        const result = await replay.store.consume(scope, replayId, replay.ttlMs);
+        const result = await replay.store.consume(replay.scope, replayId, replay.ttlMs);
         if (result === 'replay')
             return fail('replay');
+        // Fail CLOSED on anything other than the exact 'ok' sentinel — a
+        // misbehaving/non-conformant store (undefined, null, 'OK', or any other
+        // garbage return) must never be treated as a successful consume. Only an
+        // exact 'ok' proves the nonce was actually recorded.
+        if (result !== 'ok')
+            return fail('store_unavailable');
     }
     catch {
         return fail('store_unavailable');
@@ -162,7 +159,7 @@ async function verifyHmacSha256(config, rawBody, rawHeaders) {
     // 4. Replay protection — reached ONLY after a verified signature (C4).
     if (config.replay) {
         const defaultReplayId = (0, signRequest_1.sha256Hex)(providedHex.toLowerCase());
-        const replayOutcome = await consumeReplay(config.replay, headers, rawBody, defaultReplayId);
+        const replayOutcome = await consumeReplay(config.replay, rawBody, defaultReplayId);
         if (replayOutcome)
             return replayOutcome;
     }
@@ -244,14 +241,28 @@ async function verifyEd25519(config, rawBody, rawHeaders) {
     const parsedSeconds = parseStrictSecondsTimestamp(rawTimestamp);
     if (parsedSeconds === null)
         return fail('invalid_timestamp');
+    // A non-finite/negative maxSkewSeconds is a CONFIG error, not a per-request
+    // signal — NaN/Infinity would make every comparison below vacuously true
+    // (any skew is "within" an Infinity/NaN window), silently disabling
+    // freshness enforcement entirely. Fail closed rather than verify ok.
+    if (!Number.isFinite(config.timestamp.maxSkewSeconds) ||
+        config.timestamp.maxSkewSeconds < 0) {
+        return fail('invalid_config');
+    }
     const nowMs = config.timestamp.now ? config.timestamp.now() : Date.now();
+    // A non-finite injected clock is likewise a config/environment error — it
+    // would make `skewSeconds` NaN, and `NaN > maxSkewSeconds` is always
+    // `false`, so an old/stale signed request would sail through as fresh.
+    if (!Number.isFinite(nowMs)) {
+        return fail('invalid_config');
+    }
     const skewSeconds = Math.abs(nowMs / 1000 - parsedSeconds);
     if (skewSeconds > config.timestamp.maxSkewSeconds)
         return fail('stale_timestamp');
     // 5. Replay protection — reached ONLY after a verified signature (C4).
     if (config.replay) {
         const defaultReplayId = (0, signRequest_1.sha256Hex)(signatureHex.toLowerCase());
-        const replayOutcome = await consumeReplay(config.replay, headers, rawBody, defaultReplayId);
+        const replayOutcome = await consumeReplay(config.replay, rawBody, defaultReplayId);
         if (replayOutcome)
             return replayOutcome;
     }

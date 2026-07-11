@@ -40,6 +40,15 @@ export interface CorsPolicy {
      * subdomain/suffix.
      */
     allow(origin: string | undefined): boolean;
+    /**
+     * `origin === undefined` → `allowNoOrigin` (the boolean). An allowed origin
+     * → the CANONICAL, normalized allowlist string — i.e. the value stored in
+     * `origins`, never the raw incoming value — so a caller that emits this
+     * result verbatim (e.g. as an `Access-Control-Allow-Origin` header) never
+     * reflects attacker-controlled bytes. A denied origin → `false`, and
+     * `onReject` is still invoked exactly as `allow()` does.
+     */
+    resolveAllowedOrigin(origin: string | undefined): string | boolean;
     /** The resolved, normalized, de-duplicated allowlist. */
     origins: readonly string[];
     allowNoOrigin: boolean;

@@ -65,6 +65,7 @@ const SERVICE_UNAVAILABLE_REASONS: ReadonlySet<WebhookVerifyReason> = new Set([
   'missing_secret',
   'missing_public_key',
   'store_unavailable',
+  'invalid_config',
 ]);
 
 function statusForReason(reason: WebhookVerifyReason): 401 | 503 {

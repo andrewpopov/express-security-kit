@@ -81,6 +81,14 @@ function resolveCorsPolicy(config) {
             // A rejection-audit hook must never turn a normal deny into an error.
         }
     }
+    function normalizeIncoming(origin) {
+        try {
+            return normalizeOrigin(origin);
+        }
+        catch {
+            return null;
+        }
+    }
     return {
         origins,
         allowNoOrigin,
@@ -88,15 +96,24 @@ function resolveCorsPolicy(config) {
             if (origin === undefined) {
                 return allowNoOrigin;
             }
-            let normalized;
-            try {
-                normalized = normalizeOrigin(origin);
-            }
-            catch {
-                normalized = null;
-            }
+            const normalized = normalizeIncoming(origin);
             if (normalized !== null && set.has(normalized)) {
                 return true;
+            }
+            safeOnReject(origin);
+            return false;
+        },
+        resolveAllowedOrigin(origin) {
+            if (origin === undefined) {
+                return allowNoOrigin;
+            }
+            const normalized = normalizeIncoming(origin);
+            if (normalized !== null && set.has(normalized)) {
+                // `normalized` IS the canonical form: normalization is deterministic,
+                // so the incoming origin's canonicalized value is byte-identical to
+                // the allowlist entry it matched — never the raw, attacker-supplied
+                // input (which may differ in path/case/port/scheme formatting).
+                return normalized;
             }
             safeOnReject(origin);
             return false;

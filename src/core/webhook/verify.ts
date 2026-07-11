@@ -113,9 +113,6 @@ export type PublicKeyResolver = (
   headers: HeaderReader,
 ) => string | undefined | Promise<string | undefined>;
 
-/** Resolves the replay-protection scope. May be async. */
-export type ReplayScopeResolver = (headers: HeaderReader) => string | Promise<string>;
-
 /**
  * Extract an application-level replay id from the (already-verified) body.
  * Because the body is covered by the signature, an id pulled from it is
@@ -131,8 +128,21 @@ export type ReplayIdFromVerifiedBody = (body: string | Buffer) => string | undef
 export interface ReplayConfig {
   /** Durable (ideally cross-instance) nonce store. A throw from `consume()` -> `store_unavailable`, never `replay`. */
   store: NonceStore;
-  /** Replay scope/namespace (e.g. a webhook source name). */
-  scope: string | ReplayScopeResolver;
+  /**
+   * Replay scope/namespace (e.g. a webhook source name) — a STATIC string,
+   * fixed at configuration time.
+   *
+   * Deliberately NOT resolvable from the request (no `(headers) => string`
+   * form): headers are unauthenticated until the signature check below has
+   * run, and an attacker can freely vary any header while replaying a
+   * previously-valid (body, signature) pair. A scope derived from such a
+   * header would hand that replay a fresh nonce namespace on every attempt —
+   * defeating replay protection entirely (C2). If per-source namespacing is
+   * needed, configure one verifier instance per scope (e.g. one
+   * `WebhookVerifyConfig` per webhook source) rather than branching scope off
+   * request data.
+   */
+  scope: string;
   /** Nonce TTL in ms. Must be > 0 (enforced by the store; a store throw on an invalid ttlMs surfaces as `store_unavailable`). */
   ttlMs: number;
   /**
@@ -208,7 +218,8 @@ export type WebhookVerifyReason =
   | 'stale_timestamp'
   | 'missing_replay_id'
   | 'replay'
-  | 'store_unavailable';
+  | 'store_unavailable'
+  | 'invalid_config';
 
 export type WebhookVerifyOutcome =
   | { ok: true }
@@ -232,13 +243,12 @@ const HEX_CHARS_EVEN_LENGTH = /^(?:[0-9a-fA-F]{2})+$/;
 
 /**
  * Run the replay-protection step shared by both schemes: derive the
- * (authenticated) replay id, resolve the scope, and atomically consume it.
- * Only ever reached AFTER the signature has been verified (C4) — callers
- * must not invoke this earlier.
+ * (authenticated) replay id and atomically consume it under the configured
+ * (static) scope. Only ever reached AFTER the signature has been verified
+ * (C4) — callers must not invoke this earlier.
  */
 async function consumeReplay(
   replay: ReplayConfig,
-  headers: HeaderReader,
   rawBody: string | Buffer,
   defaultReplayId: string,
 ): Promise<WebhookVerifyOutcome | null> {
@@ -249,18 +259,14 @@ async function consumeReplay(
     return fail('missing_replay_id');
   }
 
-  let scope: string;
   try {
-    scope = typeof replay.scope === 'function' ? await replay.scope(headers) : replay.scope;
-  } catch {
-    // A throwing scope resolver leaves replay protection unusable — fail
-    // closed exactly like a store outage, never silently skip the check.
-    return fail('store_unavailable');
-  }
-
-  try {
-    const result = await replay.store.consume(scope, replayId, replay.ttlMs);
+    const result = await replay.store.consume(replay.scope, replayId, replay.ttlMs);
     if (result === 'replay') return fail('replay');
+    // Fail CLOSED on anything other than the exact 'ok' sentinel — a
+    // misbehaving/non-conformant store (undefined, null, 'OK', or any other
+    // garbage return) must never be treated as a successful consume. Only an
+    // exact 'ok' proves the nonce was actually recorded.
+    if (result !== 'ok') return fail('store_unavailable');
   } catch {
     return fail('store_unavailable');
   }
@@ -335,7 +341,7 @@ async function verifyHmacSha256(
   // 4. Replay protection — reached ONLY after a verified signature (C4).
   if (config.replay) {
     const defaultReplayId = sha256Hex(providedHex.toLowerCase());
-    const replayOutcome = await consumeReplay(config.replay, headers, rawBody, defaultReplayId);
+    const replayOutcome = await consumeReplay(config.replay, rawBody, defaultReplayId);
     if (replayOutcome) return replayOutcome;
   }
 
@@ -429,14 +435,31 @@ async function verifyEd25519(
   const parsedSeconds = parseStrictSecondsTimestamp(rawTimestamp);
   if (parsedSeconds === null) return fail('invalid_timestamp');
 
+  // A non-finite/negative maxSkewSeconds is a CONFIG error, not a per-request
+  // signal — NaN/Infinity would make every comparison below vacuously true
+  // (any skew is "within" an Infinity/NaN window), silently disabling
+  // freshness enforcement entirely. Fail closed rather than verify ok.
+  if (
+    !Number.isFinite(config.timestamp.maxSkewSeconds) ||
+    config.timestamp.maxSkewSeconds < 0
+  ) {
+    return fail('invalid_config');
+  }
+
   const nowMs = config.timestamp.now ? config.timestamp.now() : Date.now();
+  // A non-finite injected clock is likewise a config/environment error — it
+  // would make `skewSeconds` NaN, and `NaN > maxSkewSeconds` is always
+  // `false`, so an old/stale signed request would sail through as fresh.
+  if (!Number.isFinite(nowMs)) {
+    return fail('invalid_config');
+  }
   const skewSeconds = Math.abs(nowMs / 1000 - parsedSeconds);
   if (skewSeconds > config.timestamp.maxSkewSeconds) return fail('stale_timestamp');
 
   // 5. Replay protection — reached ONLY after a verified signature (C4).
   if (config.replay) {
     const defaultReplayId = sha256Hex(signatureHex.toLowerCase());
-    const replayOutcome = await consumeReplay(config.replay, headers, rawBody, defaultReplayId);
+    const replayOutcome = await consumeReplay(config.replay, rawBody, defaultReplayId);
     if (replayOutcome) return replayOutcome;
   }
 

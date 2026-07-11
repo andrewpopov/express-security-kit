@@ -33,11 +33,23 @@ function baseConfig(over: Partial<CorsOptionsConfig> = {}): CorsOptionsConfig {
 }
 
 describe('corsOptions — origin callback', () => {
-  it('allowed origin → callback(null, true)', () => {
+  it('FIX 4: allowed origin → callback(null, <canonical string>), NOT callback(null, true)', () => {
+    // `callback(null, true)` makes the `cors` package REFLECT the raw
+    // request Origin header verbatim. The fix emits the canonical allowlist
+    // string instead, so `cors` echoes back the fixed, policy-authorized
+    // value rather than attacker-controlled request bytes.
     const opts = corsOptions(baseConfig());
     const { err, allowed } = invokeOrigin(opts, 'https://app.example.com');
     expect(err).toBeNull();
-    expect(allowed).toBe(true);
+    expect(allowed).toBe('https://app.example.com');
+    expect(allowed).not.toBe(true);
+  });
+
+  it('FIX 4: for an allowed origin, the callback is invoked with the CANONICAL string, never `true`, even for a non-canonical (but matching) raw input', () => {
+    const opts = corsOptions(baseConfig({ origins: ['https://App.Example.com:443'] }));
+    const { allowed } = invokeOrigin(opts, 'https://APP.EXAMPLE.COM:443/some/path?x=1');
+    expect(allowed).toBe('https://app.example.com');
+    expect(allowed).not.toBe(true);
   });
 
   it('denied origin → callback(null, false)', () => {
@@ -47,12 +59,20 @@ describe('corsOptions — origin callback', () => {
     expect(allowed).toBe(false);
   });
 
-  it('never reflects the incoming origin string back as the allowed value', () => {
+  it('never reflects the incoming (denied) origin string back as the allowed value', () => {
     const opts = corsOptions(baseConfig());
     const attacker = 'https://attacker-' + Math.random().toString(36).slice(2) + '.com';
     const { allowed } = invokeOrigin(opts, attacker);
     expect(allowed).not.toBe(attacker);
     expect(allowed).toBe(false);
+  });
+
+  it('never reflects the incoming (allowed but non-canonical) origin string back verbatim', () => {
+    const opts = corsOptions(baseConfig());
+    const raw = 'https://app.example.com:443/some/path';
+    const { allowed } = invokeOrigin(opts, raw);
+    expect(allowed).not.toBe(raw);
+    expect(allowed).toBe('https://app.example.com');
   });
 
   it('undefined origin (no-Origin request) is governed by allowNoOrigin default (true)', () => {
@@ -136,9 +156,10 @@ describe('corsOptions — the origin callback cannot be overridden by the consum
     expect(allowed).toBe(false);
   });
 
-  it('never calls back with a non-boolean (e.g. reflecting the origin string) even for an allowed origin', () => {
+  it('FIX 4: for an allowed origin the callback value is the canonical allowlist string, never the boolean `true` — never a raw reflection of the request Origin', () => {
     const opts = corsOptions(baseConfig());
     const { allowed } = invokeOrigin(opts, 'https://app.example.com');
-    expect(typeof allowed).toBe('boolean');
+    expect(allowed).toBe('https://app.example.com');
+    expect(allowed).not.toBe(true);
   });
 });

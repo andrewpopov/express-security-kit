@@ -1,4 +1,4 @@
-import { createHmac } from 'node:crypto';
+import { createHmac, generateKeyPairSync, sign as cryptoSign } from 'node:crypto';
 import { describe, it, expect, vi } from 'vitest';
 import type { Request } from 'express';
 import { createWebhookVerifier } from '../createWebhookVerifier';
@@ -171,6 +171,38 @@ describe('createWebhookVerifier — 503 (unavailable, not a forgery signal)', ()
       error: { code: 'SERVICE_UNAVAILABLE', message: 'Service unavailable' },
     });
     expect(onFailure).toHaveBeenCalledWith(expect.anything(), 'store_unavailable');
+  });
+
+  it('FIX 3: invalid_config (non-finite ed25519 maxSkewSeconds) -> 503, not 401', async () => {
+    const onFailure = vi.fn();
+    const keyPair = generateKeyPairSync('ed25519');
+    const publicKeyHex = keyPair.publicKey
+      .export({ type: 'spki', format: 'der' })
+      .subarray(12)
+      .toString('hex');
+    const ts = String(Math.floor(Date.now() / 1000));
+    const body = '{"type":1}';
+    const message = Buffer.concat([Buffer.from(ts, 'utf8'), Buffer.from(body, 'utf8')]);
+    const signatureHex = cryptoSign(null, message, keyPair.privateKey).toString('hex');
+    const req = makeReq({
+      headers: { 'x-signature-ed25519': signatureHex, 'x-signature-timestamp': ts },
+      rawBody: body,
+    } as Partial<Request>);
+    const out = await invoke(
+      createWebhookVerifier({
+        scheme: 'ed25519',
+        publicKey: publicKeyHex,
+        timestamp: { header: 'x-signature-timestamp', maxSkewSeconds: NaN },
+        onFailure,
+      } as WebhookVerifierConfig),
+      req,
+    );
+    expect(out.status).toBe(503);
+    expect(out.nextCalled).toBe(false);
+    expect(out.body).toEqual({
+      error: { code: 'SERVICE_UNAVAILABLE', message: 'Service unavailable' },
+    });
+    expect(onFailure).toHaveBeenCalledWith(expect.anything(), 'invalid_config');
   });
 });
 

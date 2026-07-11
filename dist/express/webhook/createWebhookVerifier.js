@@ -15,6 +15,7 @@ const SERVICE_UNAVAILABLE_REASONS = new Set([
     'missing_secret',
     'missing_public_key',
     'store_unavailable',
+    'invalid_config',
 ]);
 function statusForReason(reason) {
     return SERVICE_UNAVAILABLE_REASONS.has(reason) ? 503 : 401;

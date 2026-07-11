@@ -46,6 +46,21 @@ try {
   if (!existsSync(join(pkgRoot, 'dist', 'core', 'index.d.ts'))) {
     fail('dist/core/index.d.ts is missing after build');
   }
+  if (!existsSync(join(pkgRoot, 'dist', 'core', 'signing', 'nonce-redis.d.ts'))) {
+    fail('dist/core/signing/nonce-redis.d.ts is missing after build');
+  }
+  if (!existsSync(join(pkgRoot, 'dist', 'core', 'cors', 'policy.d.ts'))) {
+    fail('dist/core/cors/policy.d.ts is missing after build');
+  }
+  if (!existsSync(join(pkgRoot, 'dist', 'express', 'cors', 'corsOptions.d.ts'))) {
+    fail('dist/express/cors/corsOptions.d.ts is missing after build');
+  }
+  if (!existsSync(join(pkgRoot, 'dist', 'core', 'webhook', 'verify.d.ts'))) {
+    fail('dist/core/webhook/verify.d.ts is missing after build');
+  }
+  if (!existsSync(join(pkgRoot, 'dist', 'express', 'webhook', 'createWebhookVerifier.d.ts'))) {
+    fail('dist/express/webhook/createWebhookVerifier.d.ts is missing after build');
+  }
 
   console.log('[verify:pack] Packing tarball...');
   const packOut = run('npm', ['pack', '--json', '--pack-destination', workDir], {
@@ -63,7 +78,27 @@ try {
   if (!contents.includes('package/dist/core/index.d.ts')) {
     fail('dist/core/index.d.ts is not present in the packed tarball');
   }
-  console.log('[verify:pack] OK: dist/index.d.ts and dist/core/index.d.ts ship in tarball');
+  if (!contents.includes('package/dist/core/signing/nonce-redis.d.ts')) {
+    fail('dist/core/signing/nonce-redis.d.ts is not present in the packed tarball');
+  }
+  if (!contents.includes('package/dist/core/cors/policy.d.ts')) {
+    fail('dist/core/cors/policy.d.ts is not present in the packed tarball');
+  }
+  if (!contents.includes('package/dist/express/cors/corsOptions.d.ts')) {
+    fail('dist/express/cors/corsOptions.d.ts is not present in the packed tarball');
+  }
+  if (!contents.includes('package/dist/core/webhook/verify.d.ts')) {
+    fail('dist/core/webhook/verify.d.ts is not present in the packed tarball');
+  }
+  if (!contents.includes('package/dist/express/webhook/createWebhookVerifier.d.ts')) {
+    fail('dist/express/webhook/createWebhookVerifier.d.ts is not present in the packed tarball');
+  }
+  console.log(
+    '[verify:pack] OK: dist/index.d.ts, dist/core/index.d.ts, ' +
+      'dist/core/signing/nonce-redis.d.ts, dist/core/cors/policy.d.ts, ' +
+      'dist/express/cors/corsOptions.d.ts, dist/core/webhook/verify.d.ts, and ' +
+      'dist/express/webhook/createWebhookVerifier.d.ts ship in tarball',
+  );
 
   // Set up a throwaway consumer project and install the tarball.
   const consumerDir = join(workDir, 'consumer');
@@ -116,6 +151,17 @@ try {
       console.error('CJS: redis-store subpath missing RedisRateLimitStore');
       process.exit(4);
     }
+    // Nonce-redis subpath export resolves.
+    const nonceRedis = require('${pkg.name}/nonce-redis');
+    if (typeof nonceRedis.RedisNonceStore !== 'function') {
+      console.error('CJS: nonce-redis subpath missing RedisNonceStore');
+      process.exit(7);
+    }
+    // Redis nonce store must NOT leak from the main entry.
+    if ('RedisNonceStore' in mod) {
+      console.error('CJS: RedisNonceStore should not be exported from main entry');
+      process.exit(8);
+    }
     // './core' subpath: the framework-agnostic surface.
     const core = require('${pkg.name}/core');
     const coreMissing = [
@@ -134,6 +180,65 @@ try {
     if ('RedisRateLimitStore' in core) {
       console.error('CJS: RedisRateLimitStore should not be exported from ./core');
       process.exit(6);
+    }
+    // Redis nonce store must NOT leak from './core' either.
+    if ('RedisNonceStore' in core) {
+      console.error('CJS: RedisNonceStore should not be exported from ./core');
+      process.exit(9);
+    }
+    // './cors' subpath: framework-agnostic origin policy. This consumer never
+    // installed the 'cors' npm package (only 'express' + 'helmet' peers below)
+    // — proving core CORS loads fine with the 'cors' peer absent.
+    const cors = require('${pkg.name}/cors');
+    if (typeof cors.resolveCorsPolicy !== 'function') {
+      console.error('CJS: ./cors subpath missing resolveCorsPolicy');
+      process.exit(10);
+    }
+    // resolveCorsPolicy must NOT leak from the main entry or './core'.
+    if ('resolveCorsPolicy' in mod) {
+      console.error('CJS: resolveCorsPolicy should not be exported from main entry');
+      process.exit(11);
+    }
+    if ('resolveCorsPolicy' in core) {
+      console.error('CJS: resolveCorsPolicy should not be exported from ./core');
+      process.exit(12);
+    }
+    // './express/cors' subpath: same absent-'cors'-peer consumer — corsOptions()
+    // only uses 'cors' as a TYPE, never a runtime import, so it must load too.
+    const expressCors = require('${pkg.name}/express/cors');
+    if (typeof expressCors.corsOptions !== 'function') {
+      console.error('CJS: ./express/cors subpath missing corsOptions (with cors peer absent)');
+      process.exit(13);
+    }
+    if ('corsOptions' in mod) {
+      console.error('CJS: corsOptions should not be exported from main entry');
+      process.exit(14);
+    }
+    // './webhook' subpath: framework-agnostic signature verifier. Same
+    // absent-'cors'/'ioredis'-peer consumer — verifyWebhookSignature never
+    // imports either, so it must load with no optional peers present.
+    const webhook = require('${pkg.name}/webhook');
+    if (typeof webhook.verifyWebhookSignature !== 'function') {
+      console.error('CJS: ./webhook subpath missing verifyWebhookSignature (no optional peers present)');
+      process.exit(15);
+    }
+    if ('verifyWebhookSignature' in mod) {
+      console.error('CJS: verifyWebhookSignature should not be exported from main entry');
+      process.exit(16);
+    }
+    if ('verifyWebhookSignature' in core) {
+      console.error('CJS: verifyWebhookSignature should not be exported from ./core');
+      process.exit(17);
+    }
+    // './express/webhook' subpath: the middleware wrapper.
+    const expressWebhook = require('${pkg.name}/express/webhook');
+    if (typeof expressWebhook.createWebhookVerifier !== 'function') {
+      console.error('CJS: ./express/webhook subpath missing createWebhookVerifier');
+      process.exit(18);
+    }
+    if ('createWebhookVerifier' in mod) {
+      console.error('CJS: createWebhookVerifier should not be exported from main entry');
+      process.exit(19);
     }
     console.log('CJS OK');
   `;
@@ -169,6 +274,11 @@ try {
     } from '${pkg.name}';
     import * as rootMod from '${pkg.name}';
     import { RedisRateLimitStore } from '${pkg.name}/redis-store';
+    import { RedisNonceStore } from '${pkg.name}/nonce-redis';
+    import { resolveCorsPolicy } from '${pkg.name}/cors';
+    import { corsOptions } from '${pkg.name}/express/cors';
+    import { verifyWebhookSignature } from '${pkg.name}/webhook';
+    import { createWebhookVerifier } from '${pkg.name}/express/webhook';
     import {
       verifyApiKey as coreVerifyApiKey, extractRawKey, sha256Hasher as coreSha256Hasher,
       scopedHmacHasher, timingSafeEqualHex as coreTimingSafeEqualHex, MemoryRateLimitStore,
@@ -203,6 +313,10 @@ try {
       console.error('ESM: RedisRateLimitStore subpath import failed');
       process.exit(4);
     }
+    if (typeof RedisNonceStore !== 'function') {
+      console.error('ESM: RedisNonceStore subpath import failed');
+      process.exit(7);
+    }
     // Redis store must NOT leak from either the root entry or './core'.
     if ('RedisRateLimitStore' in rootMod) {
       console.error('ESM: RedisRateLimitStore should not be exported from main entry');
@@ -211,6 +325,63 @@ try {
     if ('RedisRateLimitStore' in coreMod) {
       console.error('ESM: RedisRateLimitStore should not be exported from ./core');
       process.exit(6);
+    }
+    // Redis nonce store must NOT leak from either the root entry or './core'.
+    if ('RedisNonceStore' in rootMod) {
+      console.error('ESM: RedisNonceStore should not be exported from main entry');
+      process.exit(8);
+    }
+    if ('RedisNonceStore' in coreMod) {
+      console.error('ESM: RedisNonceStore should not be exported from ./core');
+      process.exit(9);
+    }
+    // './cors' and './express/cors' ESM named imports resolve — with the
+    // 'cors' npm package absent from this consumer, proving core CORS (and,
+    // since corsOptions() only uses 'cors' as a type, the express wrapper
+    // too) load fine without the optional peer installed.
+    if (typeof resolveCorsPolicy !== 'function') {
+      console.error('ESM: resolveCorsPolicy subpath import failed (cors peer absent)');
+      process.exit(10);
+    }
+    if (typeof corsOptions !== 'function') {
+      console.error('ESM: corsOptions subpath import failed (cors peer absent)');
+      process.exit(13);
+    }
+    if ('resolveCorsPolicy' in rootMod) {
+      console.error('ESM: resolveCorsPolicy should not be exported from main entry');
+      process.exit(11);
+    }
+    if ('resolveCorsPolicy' in coreMod) {
+      console.error('ESM: resolveCorsPolicy should not be exported from ./core');
+      process.exit(12);
+    }
+    if ('corsOptions' in rootMod) {
+      console.error('ESM: corsOptions should not be exported from main entry');
+      process.exit(14);
+    }
+    // './webhook' and './express/webhook' ESM named imports resolve — same
+    // absent-'cors'/'ioredis'-peer consumer, proving the pure-core verifier
+    // (and the express wrapper, which only imports 'express' as a type) load
+    // fine with no optional peers installed.
+    if (typeof verifyWebhookSignature !== 'function') {
+      console.error('ESM: verifyWebhookSignature subpath import failed (no optional peers present)');
+      process.exit(15);
+    }
+    if (typeof createWebhookVerifier !== 'function') {
+      console.error('ESM: createWebhookVerifier subpath import failed');
+      process.exit(18);
+    }
+    if ('verifyWebhookSignature' in rootMod) {
+      console.error('ESM: verifyWebhookSignature should not be exported from main entry');
+      process.exit(16);
+    }
+    if ('verifyWebhookSignature' in coreMod) {
+      console.error('ESM: verifyWebhookSignature should not be exported from ./core');
+      process.exit(17);
+    }
+    if ('createWebhookVerifier' in rootMod) {
+      console.error('ESM: createWebhookVerifier should not be exported from main entry');
+      process.exit(19);
     }
     console.log('ESM OK');
   `;

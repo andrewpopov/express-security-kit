@@ -17,6 +17,43 @@ CHANGELOG entry.
 
 ---
 
+## 1.2.0
+
+Three new **framework-agnostic security modules** (additive; the v1.1.0 root
+`.`, `./core`, and `./redis-store` surfaces are unchanged). Each lives in
+`core/` with a thin `express/` adapter and its own subpath export; `cors` and
+`ioredis` stay optional peers, out of the core module graph.
+
+- **Durable nonce store** — `RedisNonceStore` (new `./nonce-redis` subpath).
+  Multi-instance replay protection via Redis `SET NX PX` (atomic
+  set-if-absent-with-TTL), implementing the existing `NonceStore` contract.
+  Strict reply handling (`OK`→ok, `null`→replay, anything else throws
+  `store_unavailable`); scope+nonce both SHA-256-hashed into the key. Closes
+  the "only `MemoryNonceStore`" gap.
+- **CORS fail-closed policy** — `resolveCorsPolicy` (`./cors`) + `corsOptions()`
+  (`./express/cors`). Core does origin-resolution only: prod + empty allowlist
+  throws at construction; exact-match only — **never reflects an arbitrary
+  origin** (no `*`, no regex); opaque-origin schemes (`data:`/`file:`/
+  `javascript:`) are rejected rather than silently collapsed to `"null"`; the
+  literal `"null"` origin remains an explicit opt-in. The express wrapper emits
+  the canonical matched origin (never `callback(null, true)`, which would
+  reflect the raw Origin) and carries the full header/method defaults.
+- **Inbound webhook signature verifier** — `verifyWebhookSignature` (`./webhook`)
+  + `createWebhookVerifier()` (`./express/webhook`). Pluggable **HMAC-SHA256**
+  (GitHub `x-hub-signature-256` style) and **Ed25519** (Discord style),
+  discriminated on `scheme`. Replay identity derives ONLY from authenticated
+  material (the verified signature, or a verified-body extractor) — never a
+  mutable header; replay scope is a static string. HMAC has no timestamp check
+  (GitHub signs only the body); Ed25519 enforces skew because the timestamp is
+  part of the signed message, and fails closed on non-finite skew/clock config.
+  Constant-time compare with a length pre-check; strict hex/header validation;
+  a config/crypto exception is never mislabeled as a forged signature. The
+  express adapter maps failures to generic 401/503 responses that never leak
+  the reason.
+
+Also: the `check:core-agnostic` guard now additionally forbids `cors`/`ioredis`
+imports and any relative import escaping `src/core/`.
+
 ## 1.1.0
 
 Framework-agnostic **core carve** (Phase 1 of the core/adapter split). Backward

@@ -18,6 +18,10 @@
     "./redis-store": {
       "types": "./dist/core/rate-limit/redis-store.d.ts",
       "default": "./dist/core/rate-limit/redis-store.js"
+    },
+    "./nonce-redis": {
+      "types": "./dist/core/signing/nonce-redis.d.ts",
+      "default": "./dist/core/signing/nonce-redis.js"
     }
   },
   "files": [

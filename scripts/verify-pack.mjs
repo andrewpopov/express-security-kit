@@ -46,6 +46,9 @@ try {
   if (!existsSync(join(pkgRoot, 'dist', 'core', 'index.d.ts'))) {
     fail('dist/core/index.d.ts is missing after build');
   }
+  if (!existsSync(join(pkgRoot, 'dist', 'core', 'signing', 'nonce-redis.d.ts'))) {
+    fail('dist/core/signing/nonce-redis.d.ts is missing after build');
+  }
 
   console.log('[verify:pack] Packing tarball...');
   const packOut = run('npm', ['pack', '--json', '--pack-destination', workDir], {
@@ -63,7 +66,13 @@ try {
   if (!contents.includes('package/dist/core/index.d.ts')) {
     fail('dist/core/index.d.ts is not present in the packed tarball');
   }
-  console.log('[verify:pack] OK: dist/index.d.ts and dist/core/index.d.ts ship in tarball');
+  if (!contents.includes('package/dist/core/signing/nonce-redis.d.ts')) {
+    fail('dist/core/signing/nonce-redis.d.ts is not present in the packed tarball');
+  }
+  console.log(
+    '[verify:pack] OK: dist/index.d.ts, dist/core/index.d.ts, and ' +
+      'dist/core/signing/nonce-redis.d.ts ship in tarball',
+  );
 
   // Set up a throwaway consumer project and install the tarball.
   const consumerDir = join(workDir, 'consumer');
@@ -116,6 +125,17 @@ try {
       console.error('CJS: redis-store subpath missing RedisRateLimitStore');
       process.exit(4);
     }
+    // Nonce-redis subpath export resolves.
+    const nonceRedis = require('${pkg.name}/nonce-redis');
+    if (typeof nonceRedis.RedisNonceStore !== 'function') {
+      console.error('CJS: nonce-redis subpath missing RedisNonceStore');
+      process.exit(7);
+    }
+    // Redis nonce store must NOT leak from the main entry.
+    if ('RedisNonceStore' in mod) {
+      console.error('CJS: RedisNonceStore should not be exported from main entry');
+      process.exit(8);
+    }
     // './core' subpath: the framework-agnostic surface.
     const core = require('${pkg.name}/core');
     const coreMissing = [
@@ -134,6 +154,11 @@ try {
     if ('RedisRateLimitStore' in core) {
       console.error('CJS: RedisRateLimitStore should not be exported from ./core');
       process.exit(6);
+    }
+    // Redis nonce store must NOT leak from './core' either.
+    if ('RedisNonceStore' in core) {
+      console.error('CJS: RedisNonceStore should not be exported from ./core');
+      process.exit(9);
     }
     console.log('CJS OK');
   `;
@@ -169,6 +194,7 @@ try {
     } from '${pkg.name}';
     import * as rootMod from '${pkg.name}';
     import { RedisRateLimitStore } from '${pkg.name}/redis-store';
+    import { RedisNonceStore } from '${pkg.name}/nonce-redis';
     import {
       verifyApiKey as coreVerifyApiKey, extractRawKey, sha256Hasher as coreSha256Hasher,
       scopedHmacHasher, timingSafeEqualHex as coreTimingSafeEqualHex, MemoryRateLimitStore,
@@ -203,6 +229,10 @@ try {
       console.error('ESM: RedisRateLimitStore subpath import failed');
       process.exit(4);
     }
+    if (typeof RedisNonceStore !== 'function') {
+      console.error('ESM: RedisNonceStore subpath import failed');
+      process.exit(7);
+    }
     // Redis store must NOT leak from either the root entry or './core'.
     if ('RedisRateLimitStore' in rootMod) {
       console.error('ESM: RedisRateLimitStore should not be exported from main entry');
@@ -211,6 +241,15 @@ try {
     if ('RedisRateLimitStore' in coreMod) {
       console.error('ESM: RedisRateLimitStore should not be exported from ./core');
       process.exit(6);
+    }
+    // Redis nonce store must NOT leak from either the root entry or './core'.
+    if ('RedisNonceStore' in rootMod) {
+      console.error('ESM: RedisNonceStore should not be exported from main entry');
+      process.exit(8);
+    }
+    if ('RedisNonceStore' in coreMod) {
+      console.error('ESM: RedisNonceStore should not be exported from ./core');
+      process.exit(9);
     }
     console.log('ESM OK');
   `;

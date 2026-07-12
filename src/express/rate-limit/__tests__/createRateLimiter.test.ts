@@ -462,6 +462,7 @@ describe('fail-open', () => {
     const throwingStore: RateLimitStore = {
       hit: () => Promise.reject(new Error('redis down')),
       reset: () => Promise.resolve(),
+      decrement: () => Promise.resolve(),
     };
     const warn = vi.fn();
     const mw = createRateLimiter({
@@ -479,6 +480,7 @@ describe('fail-open', () => {
   it('allows the request when RedisRateLimitStore.hit rejects (eval throws)', async () => {
     const rejectingEvalClient: RedisLikeClient = {
       incr: async () => 1,
+      decr: async () => 0,
       pexpire: async () => 1,
       get: async () => null,
       del: async () => 0,

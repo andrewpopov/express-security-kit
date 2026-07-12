@@ -325,7 +325,7 @@ describe('createApiKeyAuth — onAuthenticated custom mapping', () => {
 
 describe('createApiKeyAuth — generic responses & fail-closed', () => {
   it('never leaks the failure reason in the response body', async () => {
-    const cases: Array<[Partial<Request>, Partial<ApiKeyAuthConfig>]> = [
+    const cases: Array<[Request, Partial<ApiKeyAuthConfig>]> = [
       [makeReq(), {}], // missing
       [makeReq(bearer('nope_key')), {}], // bad prefix
       [makeReq(bearer(RAW)), { lookup: async () => null }], // not found

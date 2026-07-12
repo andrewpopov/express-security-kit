@@ -48,7 +48,7 @@
   },
   "scripts": {
     "build": "rm -rf dist && tsc",
-    "typecheck": "tsc --noEmit && npm run check:core-agnostic",
+    "typecheck": "tsc --noEmit -p tsconfig.typecheck.json && npm run check:core-agnostic",
     "check:core-agnostic": "node scripts/check-core-agnostic.mjs",
     "test": "vitest run",
     "test:watch": "vitest",

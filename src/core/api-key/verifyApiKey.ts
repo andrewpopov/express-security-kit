@@ -7,6 +7,7 @@ import {
   ApiKeyStaticKey,
 } from './types';
 import { sha256Hasher, timingSafeEqualHex } from './hashers';
+import { normalizeIp } from './normalizeIp';
 
 /**
  * Result of {@link verifyApiKey}. A discriminated union — the verifier reports
@@ -26,8 +27,12 @@ export type ApiKeyVerifyOutcome =
        * or otherwise-invalid presented key (a real failed attempt).
        */
       present: boolean;
-      /** 403 for `ip_denied`; 401 for everything else. */
-      status: 401 | 403;
+      /**
+       * 403 for `ip_denied`; `config.errorStatus` (default 503) for `error`
+       * (an infrastructure failure, not an auth failure); 401 for everything
+       * else.
+       */
+      status: number;
     };
 
 /**
@@ -97,8 +102,21 @@ export function buildDefaultContext(record: ApiKeyRecord): SecurityContext {
 const failMissing = (
   reason: ApiKeyFailureReason,
   present: boolean,
-  status: 401 | 403 = 401,
+  status: number = 401,
 ): ApiKeyVerifyOutcome => ({ ok: false, reason, present, status });
+
+/** `config.errorStatus`, defaulting to 503. Never throws — a pathological
+ * throwing getter falls back to the default rather than escaping the
+ * fail-closed catch block that calls this. */
+function resolveErrorStatus<Req extends SecurityRequest>(
+  config: ApiKeyAuthConfigCore<Req>,
+): number {
+  try {
+    return typeof config.errorStatus === 'number' ? config.errorStatus : 503;
+  } catch {
+    return 503;
+  }
+}
 
 /**
  * Verify an API key against the request, returning a discriminated outcome
@@ -108,8 +126,11 @@ const failMissing = (
  * services that own their own response handling (e.g. a unified api-key-or-JWT
  * flow).
  *
- * NEVER throws: an unexpected error (e.g. a throwing `lookup`) resolves to
- * `{ ok: false, reason: 'error', present: true, status: 401 }` — fail closed.
+ * NEVER throws: an unexpected error (e.g. a throwing `lookup` or `hasher`)
+ * resolves to `{ ok: false, reason: 'error', present: true, status: 503 }`
+ * (status configurable via `config.errorStatus`/`onError`) — fail closed,
+ * but reported as an infrastructure failure, not a 401 authentication
+ * failure.
  * It ignores the middleware-only config fields (`optional`, `onFailure`,
  * `logger`) and does NOT call `onFailure`; it DOES run `onAuthenticated`.
  */
@@ -175,16 +196,20 @@ export async function verifyApiKey<Req extends SecurityRequest = SecurityRequest
       }
     }
 
-    // 7. IP allowlist (403, not 401). NOTE: EXACT string match against req.ip —
-    //    no CIDR/range support. Its correctness depends entirely on a properly
-    //    configured Express `trust proxy`; a too-broad trust proxy lets
-    //    X-Forwarded-For spoofing defeat it. '*' disables the check; an
-    //    undefined req.ip is denied unless '' is explicitly listed.
+    // 7. IP allowlist (403, not 401). Both sides are normalized (see
+    //    normalizeIp) before comparing — otherwise a socket reporting an
+    //    IPv4-mapped IPv6 address (`::ffff:203.0.113.7`, common behind some
+    //    proxies/load balancers) would spuriously fail to match an allowlist
+    //    entry of `203.0.113.7`. Still an EXACT match — no CIDR/range
+    //    support. Its correctness depends entirely on a properly configured
+    //    Express `trust proxy`; a too-broad trust proxy lets X-Forwarded-For
+    //    spoofing defeat it. '*' disables the check; an undefined/malformed
+    //    req.ip is denied unless '' is explicitly listed.
     if (
       record.allowedIps &&
       record.allowedIps.length > 0 &&
       !record.allowedIps.includes('*') &&
-      !record.allowedIps.includes(req.ip ?? '')
+      !record.allowedIps.map(normalizeIp).includes(normalizeIp(req.ip))
     ) {
       return failMissing('ip_denied', true, 403);
     }
@@ -195,7 +220,10 @@ export async function verifyApiKey<Req extends SecurityRequest = SecurityRequest
       : buildDefaultContext(record);
     return { ok: true, context, record };
   } catch {
-    // FAIL CLOSED on any unexpected error (e.g. lookup throws).
-    return failMissing('error', true);
+    // FAIL CLOSED on any unexpected error (e.g. a throwing lookup or
+    // hasher). This is an INFRASTRUCTURE failure, not an authentication
+    // failure — never an allow, but reported at `errorStatus` (default 503,
+    // not 401) so it doesn't look like every key was revoked.
+    return failMissing('error', true, resolveErrorStatus(config));
   }
 }

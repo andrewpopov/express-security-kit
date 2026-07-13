@@ -325,20 +325,38 @@ persistence (`lookup`), policy (`onAuthenticated`, `requireScope`), and audit
 Pipeline: extract key (Bearer or custom header) → prefix check → constant-time
 static bootstrap keys → hash + `lookup` → re-verify stored hash (defense in
 depth) → expiry → IP allowlist → build context. It **fails closed**: every
-failure — including a throwing `lookup` — returns a **generic** `401`/`403`
-(`{ error: { code: 'UNAUTHORIZED' | 'FORBIDDEN', message } }`). The specific
-reason (`missing`, `malformed`, `bad_prefix`, `not_found`, `hash_mismatch`,
-`expired`, `ip_denied`, `error`) goes ONLY to your `onFailure` hook — never to
-the client.
+failure returns a **generic** response and never proceeds. Two distinct
+failure modes:
+
+- **Authentication failure** (missing/malformed/bad-prefix/not-found/
+  hash-mismatch/expired/ip-denied key) → generic `401`/`403`
+  (`{ error: { code: 'UNAUTHORIZED' | 'FORBIDDEN', message } }`).
+- **Infrastructure failure** (`reason: 'error'` — a throwing `lookup` or
+  `hasher`, e.g. a DB outage: the check could NOT be performed) → **`503`**
+  by default (`{ error: { code: 'SERVICE_UNAVAILABLE', message: 'Service
+  Unavailable' } }`), never `401`. Reporting an infrastructure failure as
+  `401` makes monitoring blind to the outage and causes clients to treat
+  valid keys as revoked and re-provision. Override the status with
+  `errorStatus: number`, or the full response (status + body) with
+  `onError: (req) => { status, body } | void` — a throwing/rejecting
+  `onError` falls back to `errorStatus`. Neither knob can turn an
+  infrastructure failure into an allow; `verifyApiKey` still fails closed.
+
+The specific reason (`missing`, `malformed`, `bad_prefix`, `not_found`,
+`hash_mismatch`, `expired`, `ip_denied`, `error`) goes ONLY to your
+`onFailure` hook — never to the client.
 
 **Sharp edges worth knowing:**
 
-- **IP allowlist is exact-match, proxy-dependent.** `allowedIps` is an EXACT
-  string comparison against `req.ip` — **no CIDR or range support**. It is only
-  as trustworthy as your Express `trust proxy` setting: a too-broad
-  `trust proxy` lets a client spoof `X-Forwarded-For` and defeat the allowlist.
-  `'*'` disables the check; an undefined `req.ip` is denied unless `''` is
-  explicitly listed.
+- **IP allowlist is exact-match (post-normalization), proxy-dependent.**
+  `allowedIps` is compared against `req.ip` after both sides are run through
+  `normalizeIp` (strips an IPv4-mapped IPv6 `::ffff:` prefix
+  case-insensitively, lowercases, trims) — so an allowlisted `203.0.113.7`
+  still matches when a proxy reports `req.ip` as `::ffff:203.0.113.7`. Still
+  **no CIDR or range support**. It is only as trustworthy as your Express
+  `trust proxy` setting: a too-broad `trust proxy` lets a client spoof
+  `X-Forwarded-For` and defeat the allowlist. `'*'` disables the check; an
+  undefined/malformed `req.ip` is denied unless `''` is explicitly listed.
 - **`optional` mode is narrow.** Only a genuinely ABSENT credential (no/empty
   header) passes through as anonymous. A PRESENT-but-malformed credential
   (`Authorization: Basic x`, a bare `Bearer`) is a failed auth attempt and still
@@ -419,6 +437,61 @@ app.post('/api/integrations/sync', canWrite, syncHandler);
 `record.rateLimitOverride` flows straight into the rate limiter's default
 override resolver, so a per-key limit set at issue time is honored automatically
 by a downstream `createRateLimiter`.
+
+### Recipe: issuing keys (`generateApiKey`, `rotateApiKey`, `maskApiKey`)
+
+The kit above only VERIFIES keys; `generateApiKey` and friends mint them. Pure
+functions plus an optional `ApiKeyStore` port — the kit imports no ORM, so you
+keep your own (Prisma, raw SQL, ...):
+
+```ts
+import {
+  generateApiKey,
+  parseApiKey,
+  maskApiKey,
+  rotateApiKey,
+  createThrottledTouchLastUsed,
+  type ApiKeyStore,
+} from '@andrewpopov/express-security-kit';
+
+// Mint. `raw` is shown to the caller ONCE — the kit never stores it.
+const material = generateApiKey({ prefix: 'app_' });
+// material: { raw: 'app_<keyId>.<secret>', hash, keyId, prefix, last4 }
+await db.apiKey.create({ keyId: material.keyId, hash: material.hash });
+return { key: material.raw }; // show once
+
+// Verify (in your `lookup`): parse, look up by the PUBLIC keyId (indexed,
+// no table scan needed), then let verifyApiKey/createApiKeyAuth do the
+// constant-time hash compare against the stored hash of the secret.
+const parsed = parseApiKey(presentedKey, 'app_');
+const record = parsed && (await db.apiKey.findByKeyId(parsed.keyId));
+
+// Display/log: never the secret.
+maskApiKey(material); // 'app_<keyId>...<last4>'
+
+// Rotate. Provide `store.transaction` for a genuinely atomic swap (old key
+// invalid, new key valid, no window either way); without it, rotateApiKey
+// inserts the new key before revoking the old one, so there's never a
+// window where NEITHER works.
+const store: ApiKeyStore = {
+  findByKeyId: (keyId) => db.apiKey.findByKeyId(keyId),
+  insert: (record) => db.apiKey.create({ data: record }),
+  revoke: (keyId) => db.apiKey.update({ where: { keyId }, data: { revoked: true } }),
+  touchLastUsed: (keyId, at) => db.apiKey.update({ where: { keyId }, data: { lastUsedAt: at } }),
+  transaction: (fn) => db.$transaction((tx) => fn(scopedToTx(tx))),
+};
+const rotated = await rotateApiKey(store, oldKeyId, { prefix: 'app_' });
+
+// Throttle lastUsedAt writes on the hot verification path instead of
+// writing on every request (never silently swallows a write failure —
+// route it to onError instead of a bare `.catch(() => {})`).
+const touch = createThrottledTouchLastUsed(store, {
+  minIntervalMs: 60_000,
+  onError: (keyId, err) => logger.warn('lastUsedAt write failed', { keyId, err }),
+});
+// ...inside onAuthenticated / after a successful verify:
+touch(record.keyId);
+```
 
 ### Unified / multi-method auth (`verifyApiKey`)
 

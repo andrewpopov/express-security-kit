@@ -21,8 +21,12 @@ export type ApiKeyVerifyOutcome = {
      * or otherwise-invalid presented key (a real failed attempt).
      */
     present: boolean;
-    /** 403 for `ip_denied`; 401 for everything else. */
-    status: 401 | 403;
+    /**
+     * 403 for `ip_denied`; `config.errorStatus` (default 503) for `error`
+     * (an infrastructure failure, not an auth failure); 401 for everything
+     * else.
+     */
+    status: number;
 };
 /**
  * Outcome of extracting the presented credential:
@@ -54,8 +58,11 @@ export declare function buildDefaultContext(record: ApiKeyRecord): SecurityConte
  * services that own their own response handling (e.g. a unified api-key-or-JWT
  * flow).
  *
- * NEVER throws: an unexpected error (e.g. a throwing `lookup`) resolves to
- * `{ ok: false, reason: 'error', present: true, status: 401 }` — fail closed.
+ * NEVER throws: an unexpected error (e.g. a throwing `lookup` or `hasher`)
+ * resolves to `{ ok: false, reason: 'error', present: true, status: 503 }`
+ * (status configurable via `config.errorStatus`/`onError`) — fail closed,
+ * but reported as an infrastructure failure, not a 401 authentication
+ * failure.
  * It ignores the middleware-only config fields (`optional`, `onFailure`,
  * `logger`) and does NOT call `onFailure`; it DOES run `onAuthenticated`.
  */

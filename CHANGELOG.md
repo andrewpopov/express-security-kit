@@ -17,6 +17,91 @@ CHANGELOG entry.
 
 ---
 
+## 1.3.0
+
+Folds three consumer-hand-rolled improvements back into the shared package
+(`shared-package-standards.md` Part 2, standard 1: a shared package must be a
+superset of the best implementation across its consumers). All three were
+verified present in an app and absent from the kit.
+
+### BREAKING (within a minor bump — read this before upgrading)
+
+**Infrastructure errors during api-key verification now return 503, not
+401, by default.** When `lookup` or `hasher` throws (e.g. a DB outage), the
+kit previously reported it as a generic 401 — indistinguishable from a
+bad/revoked key. That is wrong: a DB outage would make monitoring blind (it
+looks like normal auth-failure traffic) and cause clients to treat valid
+keys as revoked and re-provision. `verifyApiKey`'s `reason: 'error'` outcome
+now carries `status: 503` by default, and `createApiKeyAuth` responds 503
+with `{ error: { code: 'SERVICE_UNAVAILABLE', message: 'Service
+Unavailable' } }`.
+
+This is exactly the workaround savoro (`packages/api/src/middleware/
+integrationAuth.ts`, `mapApiKeyFailure`) and cairn (`packages/api/src/
+middleware/auth.ts`, `apiKeyAuth`) each wrote their own response layer to
+avoid — both are now redundant (though harmless to keep) once on this
+version. Two new knobs let a consumer choose the exact behavior:
+
+- `errorStatus?: number` — override the status (e.g. cairn's prior 500).
+- `onError?: (req) => { status, body } | void` — override the full response;
+  a throw/rejection falls back to `errorStatus`. Never turns the failure
+  into an allow — `verifyApiKey` still fails closed in every case.
+
+If you read `outcome.status` directly (bypassing `createApiKeyAuth`) and
+compared it to a `401 | 403` literal union, note the type is now `number`.
+
+### Fixed
+
+- **IP allowlist now normalizes IPv4-mapped IPv6 addresses.** A key
+  allowlisted as `203.0.113.7` was spuriously denied (403) when the socket
+  reported `req.ip` as `::ffff:203.0.113.7` — common behind some
+  proxies/load balancers. Both sides of the allowlist comparison are now run
+  through a new `normalizeIp` (strips the `::ffff:` prefix case-
+  insensitively, lowercases, trims) before comparing. A superset of
+  savoro's own `normalizeIp` (savoro only strips the lowercase-exact
+  prefix). Still an exact match — no CIDR/range support was added, matching
+  savoro's scope. `normalizeIp` is now also exported for direct use.
+
+### Added
+
+- **API-key issuance module** (`generateApiKey`, `parseApiKey`,
+  `maskApiKey`, `rotateApiKey`, `createThrottledTouchLastUsed`, plus an
+  `ApiKeyStore` port type). The kit previously covered verification only;
+  mint/parse/mask/rotate/touch was hand-rolled separately in bewks
+  (`src/lib/auth/apiKeys.ts`), cairn (`packages/api/src/services/
+  apiKey.service.ts`), savoro (`packages/api/src/routes/admin/
+  api-keys.ts`), and smarthome (`packages/api/src/services/
+  api-key.service.ts`). The new module is a superset:
+  - **Key format** — `<prefix><keyId>.<secret>`, taken from savoro (the most
+    capable of the four): a public, unhashed `keyId` for indexed lookup plus
+    a secret that alone gets hashed, so `ApiKeyStore.findByKeyId` never
+    needs a table scan.
+  - **Display mask** — `maskApiKey` folds in smarthome's `prefix...last4`
+    mask, combined with savoro's public-`keyId` visibility, without ever
+    exposing the secret.
+  - **Transactional rotate** — `rotateApiKey` takes an `ApiKeyStore` with an
+    optional `transaction` method, folding in bewks's transactional
+    rotate (insert-then-revoke inside one transaction) when the store
+    supports it; without it, falls back to insert-before-revoke so there is
+    never a window where neither key works.
+  - **Throttled `lastUsedAt`** — `createThrottledTouchLastUsed` wraps
+    `store.touchLastUsed` so a hot verification path writes at most once per
+    key per configurable window, instead of on every request (all four apps
+    currently write per-request; bewks additionally swallows write failures
+    via `.catch(() => {})` — the kit's version routes failures to an
+    `onError` callback instead of silently dropping them).
+  - Pure functions plus an `ApiKeyStore` port — **no ORM dependency**; each
+    app keeps its own (Prisma, raw SQL, ...).
+  - Reuses the kit's existing hasher seam (`sha256Hasher` /
+    `scopedHmacHasher`) — no second hashing scheme.
+
+  **Left out as app-policy** (not folded in — each is specific to one app's
+  authorization model, not the key mechanics the kit owns): cairn's
+  project-scope resolution (`projectScopes` -> project ids, bot-user
+  minting), savoro's per-key `allowedActions`/`allowedListIds` CSV
+  authorization and env-key fallback, and bewks's role-based
+  "who can rotate whose key" check. These stay in each app.
+
 ## 1.2.2
 
 Fix — expose `./package.json` in the `exports` map. Without it,

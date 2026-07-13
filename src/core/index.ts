@@ -20,7 +20,26 @@ export type {
   ApiKeyStaticKey,
   ApiKeyFailureReason,
   ApiKeyAuthLogger,
+  ApiKeyErrorResponse,
 } from './api-key/types';
+export { normalizeIp } from './api-key/normalizeIp';
+
+export {
+  generateApiKey,
+  parseApiKey,
+  maskApiKey,
+  rotateApiKey,
+  createThrottledTouchLastUsed,
+} from './api-key/issuance';
+export type {
+  ApiKeyMaterial,
+  GenerateApiKeyOptions,
+  ParsedApiKey,
+  ApiKeyStore,
+  ApiKeyStoreRecord,
+  ApiKeyInsertInput,
+  ThrottledTouchLastUsedOptions,
+} from './api-key/issuance';
 
 export { AuditBuffer } from './audit/AuditBuffer';
 export { buildAuditEvent } from './audit/buildAuditEvent';

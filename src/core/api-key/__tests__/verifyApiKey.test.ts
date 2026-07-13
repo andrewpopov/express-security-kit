@@ -134,7 +134,7 @@ describe('verifyApiKey — failures with reasons', () => {
 });
 
 describe('verifyApiKey — fail closed, never throws', () => {
-  it('throwing lookup → ok:false, reason:error, present:true, 401 (no throw)', async () => {
+  it('throwing lookup → ok:false, reason:error, present:true, 503 by default (no throw)', async () => {
     let out!: Awaited<ReturnType<typeof verifyApiKey>>;
     await expect(
       (async () => {
@@ -144,7 +144,75 @@ describe('verifyApiKey — fail closed, never throws', () => {
         );
       })(),
     ).resolves.toBeUndefined();
-    expect(out).toEqual({ ok: false, reason: 'error', present: true, status: 401 });
+    expect(out).toEqual({ ok: false, reason: 'error', present: true, status: 503 });
+  });
+
+  it('throwing hasher → ok:false, reason:error, present:true, 503 by default (no throw)', async () => {
+    let out!: Awaited<ReturnType<typeof verifyApiKey>>;
+    await expect(
+      (async () => {
+        out = await verifyApiKey(
+          baseConfig({
+            hasher: () => { throw new Error('hasher boom'); },
+          }),
+          makeReq(bearer(RAW)),
+        );
+      })(),
+    ).resolves.toBeUndefined();
+    expect(out).toEqual({ ok: false, reason: 'error', present: true, status: 503 });
+  });
+
+  it('errorStatus config overrides the default 503 (e.g. cairn maps error to 500)', async () => {
+    const out = await verifyApiKey(
+      baseConfig({
+        errorStatus: 500,
+        lookup: async () => { throw new Error('db down'); },
+      }),
+      makeReq(bearer(RAW)),
+    );
+    expect(out).toEqual({ ok: false, reason: 'error', present: true, status: 500 });
+  });
+
+  it('a throwing lookup NEVER results in an allow', async () => {
+    const out = await verifyApiKey(
+      baseConfig({ lookup: async () => { throw new Error('db down'); } }),
+      makeReq(bearer(RAW)),
+    );
+    expect(out.ok).toBe(false);
+  });
+});
+
+describe('verifyApiKey — IP allowlist normalization (IPv4-mapped IPv6)', () => {
+  it('an allowlisted 203.0.113.7 is ALLOWED when req.ip is ::ffff:203.0.113.7', async () => {
+    const out = await verifyApiKey(
+      baseConfig({ lookup: async () => record({ allowedIps: ['203.0.113.7'] }) }),
+      makeReq({ ...bearer(RAW), ip: '::ffff:203.0.113.7' }),
+    );
+    expect(out.ok).toBe(true);
+  });
+
+  it('the mapped-prefix match is case-insensitive (::FFFF:)', async () => {
+    const out = await verifyApiKey(
+      baseConfig({ lookup: async () => record({ allowedIps: ['203.0.113.7'] }) }),
+      makeReq({ ...bearer(RAW), ip: '::FFFF:203.0.113.7' }),
+    );
+    expect(out.ok).toBe(true);
+  });
+
+  it('an unrelated IP is still denied (403)', async () => {
+    const out = await verifyApiKey(
+      baseConfig({ lookup: async () => record({ allowedIps: ['203.0.113.7'] }) }),
+      makeReq({ ...bearer(RAW), ip: '::ffff:198.51.100.9' }),
+    );
+    expect(out).toMatchObject({ ok: false, reason: 'ip_denied', status: 403 });
+  });
+
+  it('a malformed/absent req.ip fails closed (403), never allowed', async () => {
+    const out = await verifyApiKey(
+      baseConfig({ lookup: async () => record({ allowedIps: ['203.0.113.7'] }) }),
+      makeReq({ ...bearer(RAW), ip: undefined }),
+    );
+    expect(out).toMatchObject({ ok: false, reason: 'ip_denied', status: 403 });
   });
 });
 

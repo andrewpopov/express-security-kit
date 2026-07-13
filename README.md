@@ -16,7 +16,7 @@ you use the Redis store subpath.
 This package is distributed via GitHub tags (not npm):
 
 ```bash
-npm install github:andrewpopov/express-security-kit#v1.0.0
+npm install github:andrewpopov/express-security-kit#v1.3.1
 ```
 
 Peers (you almost certainly already have these):
@@ -781,6 +781,16 @@ interface SecurityContext {
 
 Importing this package augments Express's `Request` with an optional
 `securityContext?: SecurityContext`.
+
+## Verify locally
+
+```bash
+npm ci
+npm run verify
+```
+
+`verify` runs type isolation checks, all unit tests, packed-artifact checks,
+and high/critical runtime and development dependency audits locally.
 
 ## License
 

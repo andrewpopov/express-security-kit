@@ -17,6 +17,17 @@ CHANGELOG entry.
 
 ---
 
+## 1.3.1
+
+Fix — `normalizeIp` did NOT map the IPv6 loopback (`::1`) to `127.0.0.1`, while its
+doc comment claimed to be "a superset of savoro's normalizeIp". savoro's version
+does map it. Adopting v1.3.0 would therefore have silently started DENYING a key
+allowlisted as `127.0.0.1` whenever the socket reported `::1` — a regression, in
+the very function added to be a superset. Found because savoro's adoption refused
+to delete its wrapper and reported the gap instead of papering over it.
+
+`::1` and `0:0:0:0:0:0:0:1` now canonicalize to `127.0.0.1`.
+
 ## 1.3.0
 
 Folds three consumer-hand-rolled improvements back into the shared package

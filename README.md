@@ -795,3 +795,8 @@ and high/critical runtime and development dependency audits locally.
 ## License
 
 MIT © Andrew Popov
+
+## Project policies
+
+See [Contributing](./CONTRIBUTING.md), [Support](./SUPPORT.md), and the
+[Security Policy](./SECURITY.md).

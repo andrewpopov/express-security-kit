@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.normalizeOrigin = exports.resolveCorsPolicy = exports.createWebhookVerifier = exports.verifyWebhookSignature = exports.auditDeniedHook = exports.auditRateLimitHook = exports.auditFailureHook = exports.buildAuditEvent = exports.ConsoleAuditSink = exports.AuditBuffer = exports.MemoryNonceStore = exports.createRequestSigningVerifier = exports.sha256Hex = exports.signRequest = exports.buildCanonicalString = exports.requireScope = exports.timingSafeEqualHex = exports.scopedHmacHasher = exports.sha256Hasher = exports.verifyApiKey = exports.createApiKeyAuth = exports.decodedJwtKey = exports.defaultKeyGenerator = exports.verifiedIdentityKey = exports.ipKey = exports.MemoryRateLimitStore = exports.createRateLimiter = exports.createHelmetMiddleware = void 0;
+exports.normalizeOrigin = exports.resolveCorsPolicy = exports.createWebhookVerifier = exports.verifyWebhookSignature = exports.auditDeniedHook = exports.auditRateLimitHook = exports.auditFailureHook = exports.buildAuditEvent = exports.ConsoleAuditSink = exports.AuditBuffer = exports.MemoryNonceStore = exports.createRequestSigningVerifier = exports.sha256Hex = exports.signRequest = exports.buildCanonicalString = exports.createThrottledTouchLastUsed = exports.rotateApiKey = exports.maskApiKey = exports.parseApiKey = exports.generateApiKey = exports.normalizeIp = exports.requireScope = exports.timingSafeEqualHex = exports.scopedHmacHasher = exports.sha256Hasher = exports.verifyApiKey = exports.createApiKeyAuth = exports.decodedJwtKey = exports.defaultKeyGenerator = exports.verifiedIdentityKey = exports.ipKey = exports.MemoryRateLimitStore = exports.createRateLimiter = exports.createHelmetMiddleware = void 0;
 // Side-effect import: merges the `securityContext`/`rawBody` fields onto the
 // ambient `Express.Request` type. MUST be a value import (not `import type`)
 // so the augmentation is actually loaded by root consumers.
@@ -36,6 +36,16 @@ Object.defineProperty(exports, "scopedHmacHasher", { enumerable: true, get: func
 Object.defineProperty(exports, "timingSafeEqualHex", { enumerable: true, get: function () { return hashers_1.timingSafeEqualHex; } });
 var requireScope_1 = require("./express/api-key/requireScope");
 Object.defineProperty(exports, "requireScope", { enumerable: true, get: function () { return requireScope_1.requireScope; } });
+var normalizeIp_1 = require("./core/api-key/normalizeIp");
+Object.defineProperty(exports, "normalizeIp", { enumerable: true, get: function () { return normalizeIp_1.normalizeIp; } });
+// API-key ISSUANCE (mint/parse/mask/rotate). Framework-agnostic — no Request
+// pinning needed, unlike verifyApiKey/createApiKeyAuth above.
+var issuance_1 = require("./core/api-key/issuance");
+Object.defineProperty(exports, "generateApiKey", { enumerable: true, get: function () { return issuance_1.generateApiKey; } });
+Object.defineProperty(exports, "parseApiKey", { enumerable: true, get: function () { return issuance_1.parseApiKey; } });
+Object.defineProperty(exports, "maskApiKey", { enumerable: true, get: function () { return issuance_1.maskApiKey; } });
+Object.defineProperty(exports, "rotateApiKey", { enumerable: true, get: function () { return issuance_1.rotateApiKey; } });
+Object.defineProperty(exports, "createThrottledTouchLastUsed", { enumerable: true, get: function () { return issuance_1.createThrottledTouchLastUsed; } });
 var signRequest_1 = require("./core/signing/signRequest");
 Object.defineProperty(exports, "buildCanonicalString", { enumerable: true, get: function () { return signRequest_1.buildCanonicalString; } });
 Object.defineProperty(exports, "signRequest", { enumerable: true, get: function () { return signRequest_1.signRequest; } });

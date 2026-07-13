@@ -104,6 +104,34 @@ export interface ApiKeyAuthConfigCore<Req extends SecurityRequest = SecurityRequ
   optional?: boolean;
   /** Logger for audit-hook rejections. Default: console. */
   logger?: ApiKeyAuthLogger;
+  /**
+   * HTTP status returned when verification reason is `'error'` — the check
+   * could NOT be performed (a throwing `lookup`/`hasher`, e.g. a DB outage),
+   * as distinct from an authentication FAILURE (bad/unknown/expired key,
+   * which is always 401/403 regardless of this setting). Defaults to **503**:
+   * an infrastructure failure is not the same failure mode as a bad key, and
+   * reporting it as 401 makes monitoring blind to outages and causes clients
+   * to treat valid keys as revoked and re-provision. This knob only changes
+   * the status/body of the failure response — it can NEVER turn an
+   * infrastructure failure into an allow (verifyApiKey still fails closed).
+   */
+  errorStatus?: number;
+  /**
+   * Optional full override of the response sent when reason is `'error'`.
+   * Return `{ status, body }` to customize both; return/resolve nothing to
+   * fall back to `errorStatus`. May be async. A throw or rejection here is
+   * caught and logged, and the `errorStatus` default is used instead — this
+   * hook can never itself cause an allow or leave the request unanswered.
+   */
+  onError?: (
+    req: Req,
+  ) => ApiKeyErrorResponse | void | Promise<ApiKeyErrorResponse | void>;
+}
+
+/** Response override returned by {@link ApiKeyAuthConfigCore.onError}. */
+export interface ApiKeyErrorResponse {
+  status: number;
+  body?: unknown;
 }
 
 /** Minimal logger surface; defaults to console. */

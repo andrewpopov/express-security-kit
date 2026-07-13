@@ -84,12 +84,34 @@ export type {
   ApiKeyStaticKey,
   ApiKeyFailureReason,
   ApiKeyAuthLogger,
+  ApiKeyErrorResponse,
 } from './core/api-key/types';
 export type {
   ScopePredicate,
   RequireScopeOptions,
   RequireScopeLogger,
 } from './express/api-key/requireScope';
+
+export { normalizeIp } from './core/api-key/normalizeIp';
+
+// API-key ISSUANCE (mint/parse/mask/rotate). Framework-agnostic — no Request
+// pinning needed, unlike verifyApiKey/createApiKeyAuth above.
+export {
+  generateApiKey,
+  parseApiKey,
+  maskApiKey,
+  rotateApiKey,
+  createThrottledTouchLastUsed,
+} from './core/api-key/issuance';
+export type {
+  ApiKeyMaterial,
+  GenerateApiKeyOptions,
+  ParsedApiKey,
+  ApiKeyStore,
+  ApiKeyStoreRecord,
+  ApiKeyInsertInput,
+  ThrottledTouchLastUsedOptions,
+} from './core/api-key/issuance';
 
 export {
   buildCanonicalString,

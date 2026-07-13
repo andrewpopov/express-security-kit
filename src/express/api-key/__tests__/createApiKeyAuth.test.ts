@@ -339,7 +339,7 @@ describe('createApiKeyAuth — generic responses & fail-closed', () => {
     }
   });
 
-  it('fails CLOSED (401) when lookup throws, calling onFailure(error)', async () => {
+  it('fails CLOSED (503 by default, not 401) when lookup throws, calling onFailure(error)', async () => {
     const onFailure = vi.fn();
     const out = await invoke(
       createApiKeyAuth(
@@ -352,9 +352,80 @@ describe('createApiKeyAuth — generic responses & fail-closed', () => {
       ),
       makeReq(bearer(RAW)),
     );
-    expect(out.status).toBe(401);
+    expect(out.status).toBe(503);
+    expect(out.body).toEqual({
+      error: { code: 'SERVICE_UNAVAILABLE', message: 'Service Unavailable' },
+    });
     expect(out.nextCalled).toBe(false); // NOT allowed through
     expect(onFailure).toHaveBeenCalledWith(expect.anything(), 'error');
+  });
+
+  it('fails CLOSED (503 by default, not 401) when hasher throws', async () => {
+    const out = await invoke(
+      createApiKeyAuth(
+        baseConfig({
+          hasher: () => {
+            throw new Error('hasher boom');
+          },
+        }),
+      ),
+      makeReq(bearer(RAW)),
+    );
+    expect(out.status).toBe(503);
+    expect(out.nextCalled).toBe(false); // NOT allowed through
+  });
+
+  it('errorStatus config customizes the infrastructure-failure status (e.g. cairn -> 500)', async () => {
+    const out = await invoke(
+      createApiKeyAuth(
+        baseConfig({
+          errorStatus: 500,
+          lookup: async () => {
+            throw new Error('db down');
+          },
+        }),
+      ),
+      makeReq(bearer(RAW)),
+    );
+    expect(out.status).toBe(500);
+    expect(out.body).toEqual({
+      error: { code: 'INTERNAL_ERROR', message: 'Internal Server Error' },
+    });
+  });
+
+  it('onError customizes both status and body, and a throwing onError falls back to errorStatus', async () => {
+    const warn = vi.fn();
+    const outCustom = await invoke(
+      createApiKeyAuth(
+        baseConfig({
+          onError: async () => ({ status: 502, body: { custom: true } }),
+          lookup: async () => {
+            throw new Error('db down');
+          },
+        }),
+      ),
+      makeReq(bearer(RAW)),
+    );
+    expect(outCustom.status).toBe(502);
+    expect(outCustom.body).toEqual({ custom: true });
+
+    const outThrowing = await invoke(
+      createApiKeyAuth(
+        baseConfig({
+          logger: { warn },
+          onError: () => {
+            throw new Error('onError boom');
+          },
+          lookup: async () => {
+            throw new Error('db down');
+          },
+        }),
+      ),
+      makeReq(bearer(RAW)),
+    );
+    expect(outThrowing.status).toBe(503); // falls back to the default, never an allow
+    expect(outThrowing.nextCalled).toBe(false);
+    expect(warn).toHaveBeenCalled();
   });
 
   it('a throwing onFailure hook does not break the response', async () => {

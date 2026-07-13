@@ -6,9 +6,16 @@ export type ApiKeyAuthConfig = ApiKeyAuthConfigCore<Request>;
  * Build an API-key authentication middleware.
  *
  * Auth FAILS CLOSED: any failure (missing/bad/expired/denied key, or an
- * unexpected error such as a throwing `lookup`) yields a GENERIC 401/403 and the
- * request does NOT proceed. This is the opposite of the rate limiter, which
- * fails open. Only the `onFailure` audit hook receives the specific reason.
+ * unexpected error such as a throwing `lookup`/`hasher`) yields a GENERIC
+ * response and the request does NOT proceed. This is the opposite of the
+ * rate limiter, which fails open. Only the `onFailure` audit hook receives
+ * the specific reason.
+ *
+ * A `reason: 'error'` outcome (the check could not be performed — e.g. a DB
+ * outage) is DELIBERATELY distinct from an auth failure: it responds with
+ * `config.errorStatus` (default **503**, not 401) — see `ApiKeyAuthConfig`.
+ * A DB outage reported as 401 makes monitoring blind to the outage and
+ * causes clients to treat valid keys as revoked and re-provision.
  *
  * This is a thin middleware wrapper around {@link verifyApiKey}: it applies the
  * `optional`-passthrough policy and translates the verification outcome into an

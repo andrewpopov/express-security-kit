@@ -17,6 +17,15 @@ CHANGELOG entry.
 
 ---
 
+## 1.2.2
+
+Fix — expose `./package.json` in the `exports` map. Without it,
+`require('@andrewpopov/express-security-kit/package.json')` threw
+`ERR_PACKAGE_PATH_NOT_EXPORTED` — which broke the standards' own documented way of
+verifying an INSTALLED version, the guard against the `github:` re-resolve trap.
+
+No runtime change.
+
 ## 1.2.1
 
 Purely additive: the CORS + webhook module surfaces added in v1.2.0 are now

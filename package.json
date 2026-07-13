@@ -1,6 +1,6 @@
 {
   "name": "@andrewpopov/express-security-kit",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "Dependency-light Express security library. Owns the machinery (helmet preset, rate limiter); consuming services inject all policy.",
   "author": "Andrew Popov",
   "license": "MIT",
@@ -38,7 +38,8 @@
     "./express/webhook": {
       "types": "./dist/express/webhook/createWebhookVerifier.d.ts",
       "default": "./dist/express/webhook/createWebhookVerifier.js"
-    }
+    },
+    "./package.json": "./package.json"
   },
   "files": [
     "dist"

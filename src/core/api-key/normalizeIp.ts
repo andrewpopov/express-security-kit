@@ -5,12 +5,16 @@
  * - Strips an IPv4-mapped IPv6 prefix (`::ffff:203.0.113.7` -> `203.0.113.7`),
  *   matched case-insensitively — a socket can report the prefix as `::FFFF:`
  *   per RFC 4291 §2.5.5.2, not just lowercase.
- * - Lowercases the result, so a bare IPv6 literal compares case-insensitively
- *   too (a superset of savoro's `normalizeIp`, which only strips the prefix).
+ * - Lowercases the result, so a bare IPv6 literal compares case-insensitively.
+ * - Canonicalizes the IPv6 loopback (`::1`, and its long form) to `127.0.0.1`,
+ *   so an allowlist entry of `127.0.0.1` still matches when the socket reports
+ *   the v6 loopback. savoro's hand-rolled version did this; an earlier cut of
+ *   this function did NOT, and its doc comment falsely claimed to be a superset
+ *   of savoro's — adopting it would have silently started DENYING the loopback.
  *
  * Deliberately NOT CIDR-aware: this is an exact-match normalizer for an
- * exact-match allowlist (see {@link ApiKeyRecord.allowedIps}) — same scope as
- * savoro's version, just correct for the mixed-case prefix case.
+ * exact-match allowlist (see {@link ApiKeyRecord.allowedIps}) — the same scope
+ * as savoro's version.
  *
  * Never throws: a non-string or empty input normalizes to `''`, which only
  * matches an allowlist entry that itself normalizes to `''` (fail closed —
@@ -20,6 +24,8 @@ export function normalizeIp(ip: string | undefined | null): string {
   if (typeof ip !== 'string') return '';
   const trimmed = ip.trim();
   const match = /^::ffff:(.+)$/i.exec(trimmed);
-  const stripped = match ? match[1] : trimmed;
-  return stripped.toLowerCase();
+  const stripped = (match ? match[1] : trimmed).toLowerCase();
+  // IPv6 loopback, short and long form, canonicalized to the v4 loopback.
+  if (stripped === '::1' || stripped === '0:0:0:0:0:0:0:1') return '127.0.0.1';
+  return stripped;
 }

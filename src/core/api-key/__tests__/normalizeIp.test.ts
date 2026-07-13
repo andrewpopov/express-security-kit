@@ -32,3 +32,26 @@ describe('normalizeIp', () => {
     expect(() => normalizeIp('' as string)).not.toThrow();
   });
 });
+
+// savoro's hand-rolled normalizeIp mapped the IPv6 loopback to the v4 one. An
+// earlier cut of THIS function did not — while its doc comment claimed to be a
+// superset of savoro's. Adopting it would have silently started DENYING a key
+// allowlisted as 127.0.0.1 whenever the socket reported ::1. The kit must be a
+// superset of the code it replaces, so the loopback mapping lives here now.
+describe('IPv6 loopback is canonicalized to the v4 loopback (savoro parity)', () => {
+  it('maps ::1 to 127.0.0.1', () => {
+    expect(normalizeIp('::1')).toBe('127.0.0.1');
+  });
+
+  it('maps the long-form IPv6 loopback to 127.0.0.1', () => {
+    expect(normalizeIp('0:0:0:0:0:0:0:1')).toBe('127.0.0.1');
+  });
+
+  it('leaves the v4 loopback alone', () => {
+    expect(normalizeIp('127.0.0.1')).toBe('127.0.0.1');
+  });
+
+  it('so an allowlist entry of 127.0.0.1 matches a request from ::1', () => {
+    expect(normalizeIp('::1')).toBe(normalizeIp('127.0.0.1'));
+  });
+});

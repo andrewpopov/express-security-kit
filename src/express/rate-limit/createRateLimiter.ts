@@ -2,7 +2,9 @@ import type { Request, Response, NextFunction, RequestHandler } from 'express';
 import { MemoryRateLimitStore, RateLimitStore } from '../../core/rate-limit/store';
 import {
   defaultKeyGenerator,
+  verifiedIdentityKeyResolved,
   KeyGeneratorCore,
+  ClientIpResolutionOptions,
 } from '../../core/rate-limit/keyGenerator';
 
 /** Express-pinned alias: same shape as the pre-carve `KeyGenerator`. */
@@ -39,6 +41,18 @@ export interface RateLimiterConfig {
   algorithm?: RateLimitAlgorithm;
   /** Key generator. Default: verifiedIdentityKey (aka defaultKeyGenerator). */
   keyGenerator?: KeyGenerator;
+  /**
+   * OPT-IN client-IP trust options applied to the DEFAULT key generator
+   * (verifiedIdentityKey falling back to ipKey, resolved via
+   * `resolveClientIp`) when no explicit `keyGenerator` is given. Use this
+   * behind Cloudflare/cloudflared, where `req.ip` alone either collapses
+   * every caller into one bucket (no `trust proxy`) or is bypassable via a
+   * forged `X-Forwarded-For` first hop (`trust proxy: true`). Ignored
+   * entirely when `keyGenerator` is set — bring-your-own-generator always
+   * wins. Omitting this leaves keying byte-for-byte identical to pre-1.4.0
+   * behavior (`req.ip` via the untouched `defaultKeyGenerator`).
+   */
+  ipResolution?: ClientIpResolutionOptions;
   /** Backing store. Default: a shared in-process MemoryRateLimitStore. */
   store?: RateLimitStore;
   /**
@@ -349,7 +363,14 @@ function scheduleRefundOnSuccess(
 
 function buildSingleLimiter(config: RateLimiterConfig): RequestHandler {
   const algorithm = config.algorithm ?? 'fixed';
-  const keyGenerator = config.keyGenerator ?? defaultKeyGenerator;
+  // `ipResolution` only takes effect when no explicit `keyGenerator` is
+  // given — an explicit generator is always authoritative. With neither set,
+  // this is `defaultKeyGenerator` untouched, preserving pre-1.4.0 keys.
+  const keyGenerator =
+    config.keyGenerator ??
+    (config.ipResolution
+      ? verifiedIdentityKeyResolved<Request>(config.ipResolution)
+      : defaultKeyGenerator);
   const store = config.store ?? getSharedStore();
   const emitHeaders = config.headers ?? true;
   const clock = config.now ?? Date.now;

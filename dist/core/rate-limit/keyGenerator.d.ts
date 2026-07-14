@@ -1,4 +1,7 @@
 import type { SecurityRequest } from '../http';
+import { ClientIpResolutionOptions } from '../ip/resolveClientIp';
+export type { ClientIpResolutionOptions } from '../ip/resolveClientIp';
+export { resolveClientIp } from '../ip/resolveClientIp';
 export type KeyGeneratorCore<Req extends SecurityRequest = SecurityRequest> = (req: Req) => string;
 /**
  * Coarse per-IP key. Use for the EARLY flood/DoS tier (Tier 1) mounted before
@@ -24,6 +27,27 @@ export declare function verifiedIdentityKey<Req extends SecurityRequest = Securi
  * default.
  */
 export declare const defaultKeyGenerator: KeyGeneratorCore;
+/**
+ * Factory for {@link ipKey}, but keyed on {@link resolveClientIp} instead of
+ * `req.ip` alone — OPT-IN (see {@link ClientIpResolutionOptions}) so an
+ * adopter behind Cloudflare/cloudflared can key on the real caller instead of
+ * every request collapsing onto one shared edge IP, or trust the last
+ * `X-Forwarded-For` hop rather than the spoofable first one. Calling this
+ * with no options is intentionally NOT equivalent to plain {@link ipKey}: it
+ * runs the input through {@link resolveClientIp}'s own normalization even in
+ * the no-trust-flags case. Existing consumers who don't opt in are
+ * unaffected — they keep using {@link ipKey}/{@link defaultKeyGenerator}
+ * untouched.
+ */
+export declare function ipKeyResolved<Req extends SecurityRequest = SecurityRequest>(options?: ClientIpResolutionOptions): KeyGeneratorCore<Req>;
+/**
+ * Factory for {@link verifiedIdentityKey}, but falling back to
+ * {@link ipKeyResolved} instead of plain {@link ipKey}. Same opt-in contract
+ * as {@link ipKeyResolved}: no options means the default (least-trusting)
+ * resolution, not a behavior change for anyone not passing this factory
+ * `trustCloudflare`/`trustXff`.
+ */
+export declare function verifiedIdentityKeyResolved<Req extends SecurityRequest = SecurityRequest>(options?: ClientIpResolutionOptions): KeyGeneratorCore<Req>;
 export interface DecodedJwtKeyOptionsCore<Req extends SecurityRequest = SecurityRequest> {
     /** JWT claim to key on. Default 'sub'. */
     claim?: string;

@@ -203,7 +203,13 @@ function scheduleRefundOnSuccess(res, store, key, windowMs, now, config, refundF
 }
 function buildSingleLimiter(config) {
     const algorithm = config.algorithm ?? 'fixed';
-    const keyGenerator = config.keyGenerator ?? keyGenerator_1.defaultKeyGenerator;
+    // `ipResolution` only takes effect when no explicit `keyGenerator` is
+    // given — an explicit generator is always authoritative. With neither set,
+    // this is `defaultKeyGenerator` untouched, preserving pre-1.4.0 keys.
+    const keyGenerator = config.keyGenerator ??
+        (config.ipResolution
+            ? (0, keyGenerator_1.verifiedIdentityKeyResolved)(config.ipResolution)
+            : keyGenerator_1.defaultKeyGenerator);
     const store = config.store ?? getSharedStore();
     const emitHeaders = config.headers ?? true;
     const clock = config.now ?? Date.now;

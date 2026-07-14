@@ -1,9 +1,14 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.defaultKeyGenerator = void 0;
+exports.defaultKeyGenerator = exports.resolveClientIp = void 0;
 exports.ipKey = ipKey;
 exports.verifiedIdentityKey = verifiedIdentityKey;
+exports.ipKeyResolved = ipKeyResolved;
+exports.verifiedIdentityKeyResolved = verifiedIdentityKeyResolved;
 exports.decodedJwtKey = decodedJwtKey;
+const resolveClientIp_1 = require("../ip/resolveClientIp");
+var resolveClientIp_2 = require("../ip/resolveClientIp");
+Object.defineProperty(exports, "resolveClientIp", { enumerable: true, get: function () { return resolveClientIp_2.resolveClientIp; } });
 /**
  * Coarse per-IP key. Use for the EARLY flood/DoS tier (Tier 1) mounted before
  * auth.
@@ -36,6 +41,38 @@ function verifiedIdentityKey(req) {
  * default.
  */
 exports.defaultKeyGenerator = verifiedIdentityKey;
+/**
+ * Factory for {@link ipKey}, but keyed on {@link resolveClientIp} instead of
+ * `req.ip` alone — OPT-IN (see {@link ClientIpResolutionOptions}) so an
+ * adopter behind Cloudflare/cloudflared can key on the real caller instead of
+ * every request collapsing onto one shared edge IP, or trust the last
+ * `X-Forwarded-For` hop rather than the spoofable first one. Calling this
+ * with no options is intentionally NOT equivalent to plain {@link ipKey}: it
+ * runs the input through {@link resolveClientIp}'s own normalization even in
+ * the no-trust-flags case. Existing consumers who don't opt in are
+ * unaffected — they keep using {@link ipKey}/{@link defaultKeyGenerator}
+ * untouched.
+ */
+function ipKeyResolved(options = {}) {
+    return (req) => `ip:${(0, resolveClientIp_1.resolveClientIp)(req, options) || 'unknown'}`;
+}
+/**
+ * Factory for {@link verifiedIdentityKey}, but falling back to
+ * {@link ipKeyResolved} instead of plain {@link ipKey}. Same opt-in contract
+ * as {@link ipKeyResolved}: no options means the default (least-trusting)
+ * resolution, not a behavior change for anyone not passing this factory
+ * `trustCloudflare`/`trustXff`.
+ */
+function verifiedIdentityKeyResolved(options = {}) {
+    const fallback = ipKeyResolved(options);
+    return (req) => {
+        const principalId = req.securityContext?.principalId;
+        if (principalId) {
+            return `user:${principalId}`;
+        }
+        return fallback(req);
+    };
+}
 /** Base64url-decode a single JWT segment. Returns undefined on any problem. */
 function decodeSegment(segment) {
     try {

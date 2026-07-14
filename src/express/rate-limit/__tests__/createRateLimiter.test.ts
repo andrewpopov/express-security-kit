@@ -682,3 +682,74 @@ describe('skipSuccessful (refund on success)', () => {
     expect(decrementSpy).not.toHaveBeenCalled();
   });
 });
+
+describe('ipResolution (ROG-1094 wiring)', () => {
+  /** Drive the limiter to a 429 and capture the bucket key it used. */
+  async function keyUsedFor(config: Omit<RateLimiterConfig, 'windowMs' | 'max'>, req: Request): Promise<string> {
+    let seenKey = '';
+    const mw = createRateLimiter({
+      windowMs: 1000,
+      max: 0, // reject on the very first hit so we always observe the key
+      store: makeStore(),
+      now: () => 10_000,
+      buildResponseBody: (info) => {
+        seenKey = info.key;
+        return {};
+      },
+      ...config,
+    });
+    await new Promise<void>((resolve) => {
+      const made = makeRes(resolve);
+      void mw(req, made.res, () => resolve());
+    });
+    return seenKey;
+  }
+
+  it('regression guard: with no ipResolution set, the key is byte-for-byte identical to pre-1.4.0 (plain req.ip)', async () => {
+    const req = makeReq({ ip: '203.0.113.9' });
+    expect(await keyUsedFor({}, req)).toBe('ip:203.0.113.9');
+  });
+
+  it('ignores ipResolution entirely when an explicit keyGenerator is given', async () => {
+    const req = makeReq({
+      ip: '203.0.113.9',
+      headers: { 'cf-connecting-ip': '198.51.100.1' },
+    });
+    const key = await keyUsedFor(
+      { keyGenerator: ipKey, ipResolution: { trustCloudflare: true } },
+      req,
+    );
+    expect(key).toBe('ip:203.0.113.9'); // NOT the CF header — keyGenerator wins
+  });
+
+  it('ADVERSARIAL: trustXff keys on the last hop, not a spoofed leading hop', async () => {
+    const req = makeReq({
+      headers: { 'x-forwarded-for': '1.2.3.4, 203.0.113.7' }, // "1.2.3.4" is forged
+    });
+    const key = await keyUsedFor({ ipResolution: { trustXff: true } }, req);
+    expect(key).toBe('ip:203.0.113.7');
+  });
+
+  it('trustCloudflare keys on Cf-Connecting-Ip even in the presence of a spoofed XFF', async () => {
+    const req = makeReq({
+      headers: {
+        'cf-connecting-ip': '203.0.113.7',
+        'x-forwarded-for': '1.2.3.4, 203.0.113.7',
+      },
+    });
+    const key = await keyUsedFor(
+      { ipResolution: { trustCloudflare: true, trustXff: true } },
+      req,
+    );
+    expect(key).toBe('ip:203.0.113.7');
+  });
+
+  it('a verified principal still takes precedence over IP resolution', async () => {
+    const req = makeReq({
+      headers: { 'cf-connecting-ip': '203.0.113.7' },
+      securityContext: { principalType: 'user', principalId: 'u1' },
+    });
+    const key = await keyUsedFor({ ipResolution: { trustCloudflare: true } }, req);
+    expect(key).toBe('user:u1');
+  });
+});

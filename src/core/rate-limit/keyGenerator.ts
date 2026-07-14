@@ -1,4 +1,10 @@
 import type { SecurityRequest } from '../http';
+import {
+  resolveClientIp,
+  ClientIpResolutionOptions,
+} from '../ip/resolveClientIp';
+export type { ClientIpResolutionOptions } from '../ip/resolveClientIp';
+export { resolveClientIp } from '../ip/resolveClientIp';
 
 export type KeyGeneratorCore<Req extends SecurityRequest = SecurityRequest> = (
   req: Req,
@@ -42,6 +48,44 @@ export function verifiedIdentityKey<Req extends SecurityRequest = SecurityReques
  * default.
  */
 export const defaultKeyGenerator: KeyGeneratorCore = verifiedIdentityKey;
+
+/**
+ * Factory for {@link ipKey}, but keyed on {@link resolveClientIp} instead of
+ * `req.ip` alone — OPT-IN (see {@link ClientIpResolutionOptions}) so an
+ * adopter behind Cloudflare/cloudflared can key on the real caller instead of
+ * every request collapsing onto one shared edge IP, or trust the last
+ * `X-Forwarded-For` hop rather than the spoofable first one. Calling this
+ * with no options is intentionally NOT equivalent to plain {@link ipKey}: it
+ * runs the input through {@link resolveClientIp}'s own normalization even in
+ * the no-trust-flags case. Existing consumers who don't opt in are
+ * unaffected — they keep using {@link ipKey}/{@link defaultKeyGenerator}
+ * untouched.
+ */
+export function ipKeyResolved<Req extends SecurityRequest = SecurityRequest>(
+  options: ClientIpResolutionOptions = {},
+): KeyGeneratorCore<Req> {
+  return (req: Req): string => `ip:${resolveClientIp(req, options) || 'unknown'}`;
+}
+
+/**
+ * Factory for {@link verifiedIdentityKey}, but falling back to
+ * {@link ipKeyResolved} instead of plain {@link ipKey}. Same opt-in contract
+ * as {@link ipKeyResolved}: no options means the default (least-trusting)
+ * resolution, not a behavior change for anyone not passing this factory
+ * `trustCloudflare`/`trustXff`.
+ */
+export function verifiedIdentityKeyResolved<Req extends SecurityRequest = SecurityRequest>(
+  options: ClientIpResolutionOptions = {},
+): KeyGeneratorCore<Req> {
+  const fallback = ipKeyResolved<Req>(options);
+  return (req: Req): string => {
+    const principalId = req.securityContext?.principalId;
+    if (principalId) {
+      return `user:${principalId}`;
+    }
+    return fallback(req);
+  };
+}
 
 export interface DecodedJwtKeyOptionsCore<Req extends SecurityRequest = SecurityRequest> {
   /** JWT claim to key on. Default 'sub'. */

@@ -7,13 +7,17 @@ export type { RateLimiterConfig, RateLimitAlgorithm, RateLimitOverride, RateLimi
 export type { KeyGenerator } from './express/rate-limit/createRateLimiter';
 export { MemoryRateLimitStore } from './core/rate-limit/store';
 export type { RateLimitStore, HitResult, MemoryRateLimitStoreOptions, } from './core/rate-limit/store';
-import type { KeyGeneratorCore, DecodedJwtKeyOptionsCore } from './core/rate-limit/keyGenerator';
+import type { KeyGeneratorCore, DecodedJwtKeyOptionsCore, ClientIpResolutionOptions } from './core/rate-limit/keyGenerator';
 /** Express-pinned alias: same shape as the pre-carve `DecodedJwtKeyOptions`. */
 export type DecodedJwtKeyOptions = DecodedJwtKeyOptionsCore<Request>;
 export declare const ipKey: KeyGeneratorCore<Request>;
 export declare const verifiedIdentityKey: KeyGeneratorCore<Request>;
 export declare const defaultKeyGenerator: KeyGeneratorCore<Request>;
 export declare const decodedJwtKey: (opts?: DecodedJwtKeyOptions) => KeyGeneratorCore<Request>;
+export type { ClientIpResolutionOptions };
+export declare const ipKeyResolved: (options?: ClientIpResolutionOptions) => KeyGeneratorCore<Request>;
+export declare const verifiedIdentityKeyResolved: (options?: ClientIpResolutionOptions) => KeyGeneratorCore<Request>;
+export { resolveClientIp } from './core/ip/resolveClientIp';
 export type { SecurityContext } from './core/context';
 export { createApiKeyAuth } from './express/api-key/createApiKeyAuth';
 import type { ApiKeyAuthConfig } from './express/api-key/createApiKeyAuth';

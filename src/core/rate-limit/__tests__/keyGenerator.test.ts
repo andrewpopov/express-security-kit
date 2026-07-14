@@ -5,6 +5,8 @@ import {
   verifiedIdentityKey,
   defaultKeyGenerator,
   decodedJwtKey,
+  ipKeyResolved,
+  verifiedIdentityKeyResolved,
 } from '../keyGenerator';
 
 function req(partial: Partial<Request>): Request {
@@ -37,6 +39,58 @@ describe('verifiedIdentityKey', () => {
   });
   it('is the exported default', () => {
     expect(defaultKeyGenerator).toBe(verifiedIdentityKey);
+  });
+});
+
+describe('ipKeyResolved', () => {
+  it('regression guard: with no options, matches plain req.ip like ipKey', () => {
+    const gen = ipKeyResolved();
+    expect(gen(req({ ip: '1.2.3.4' }))).toBe('ip:1.2.3.4');
+    expect(gen(req({ ip: '1.2.3.4' }))).toBe(ipKey(req({ ip: '1.2.3.4' })));
+  });
+
+  it('handles missing ip', () => {
+    expect(ipKeyResolved()(req({}))).toBe('ip:unknown');
+  });
+
+  it('ADVERSARIAL: trustXff keys on the last XFF hop, not a spoofed leading one', () => {
+    const gen = ipKeyResolved({ trustXff: true });
+    const r = req({ headers: { 'x-forwarded-for': '1.2.3.4, 203.0.113.7' } });
+    expect(gen(r)).toBe('ip:203.0.113.7');
+  });
+
+  it('trustCloudflare keys on Cf-Connecting-Ip', () => {
+    const gen = ipKeyResolved({ trustCloudflare: true });
+    const r = req({ headers: { 'cf-connecting-ip': '203.0.113.7' } });
+    expect(gen(r)).toBe('ip:203.0.113.7');
+  });
+
+  it('never throws on hostile input', () => {
+    const gen = ipKeyResolved({ trustCloudflare: true, trustXff: true });
+    expect(() => gen(req({ headers: { 'x-forwarded-for': ['a', 'b'] as unknown as string } }))).not.toThrow();
+  });
+});
+
+describe('verifiedIdentityKeyResolved', () => {
+  it('prefers a verified principalId over any IP resolution', () => {
+    const gen = verifiedIdentityKeyResolved({ trustCloudflare: true });
+    const r = req({
+      headers: { 'cf-connecting-ip': '203.0.113.7' },
+      securityContext: { principalType: 'user', principalId: 'u42' },
+    });
+    expect(gen(r)).toBe('user:u42');
+  });
+
+  it('falls back to ipKeyResolved when no context', () => {
+    const gen = verifiedIdentityKeyResolved({ trustXff: true });
+    const r = req({ headers: { 'x-forwarded-for': '1.2.3.4, 203.0.113.7' } });
+    expect(gen(r)).toBe('ip:203.0.113.7');
+  });
+
+  it('regression guard: with no options, falls back exactly like verifiedIdentityKey', () => {
+    const gen = verifiedIdentityKeyResolved();
+    expect(gen(req({ ip: '9.9.9.9' }))).toBe('ip:9.9.9.9');
+    expect(gen(req({ ip: '9.9.9.9' }))).toBe(verifiedIdentityKey(req({ ip: '9.9.9.9' })));
   });
 });
 

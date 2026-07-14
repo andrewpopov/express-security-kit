@@ -42,12 +42,15 @@ export type {
 import {
   defaultKeyGenerator as defaultKeyGeneratorCore,
   ipKey as ipKeyCore,
+  ipKeyResolved as ipKeyResolvedCore,
   verifiedIdentityKey as verifiedIdentityKeyCore,
+  verifiedIdentityKeyResolved as verifiedIdentityKeyResolvedCore,
   decodedJwtKey as decodedJwtKeyCore,
 } from './core/rate-limit/keyGenerator';
 import type {
   KeyGeneratorCore,
   DecodedJwtKeyOptionsCore,
+  ClientIpResolutionOptions,
 } from './core/rate-limit/keyGenerator';
 /** Express-pinned alias: same shape as the pre-carve `DecodedJwtKeyOptions`. */
 export type DecodedJwtKeyOptions = DecodedJwtKeyOptionsCore<Request>;
@@ -56,6 +59,18 @@ export const verifiedIdentityKey: KeyGeneratorCore<Request> = verifiedIdentityKe
 export const defaultKeyGenerator: KeyGeneratorCore<Request> = defaultKeyGeneratorCore;
 export const decodedJwtKey: (opts?: DecodedJwtKeyOptions) => KeyGeneratorCore<Request> =
   decodedJwtKeyCore;
+export type { ClientIpResolutionOptions };
+export const ipKeyResolved: (
+  options?: ClientIpResolutionOptions,
+) => KeyGeneratorCore<Request> = ipKeyResolvedCore;
+export const verifiedIdentityKeyResolved: (
+  options?: ClientIpResolutionOptions,
+) => KeyGeneratorCore<Request> = verifiedIdentityKeyResolvedCore;
+
+// Client-IP resolution (ROG-1094): framework-agnostic, so it's a safe direct
+// re-export (no Request-pinning wrapper needed) — same reasoning as
+// `resolveCorsPolicy`/`normalizeOrigin` below.
+export { resolveClientIp } from './core/ip/resolveClientIp';
 
 export type { SecurityContext } from './core/context';
 

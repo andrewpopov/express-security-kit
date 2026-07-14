@@ -167,3 +167,153 @@ describe('resolveClientIp: never throws on garbage input', () => {
     expect(resolved.length).toBeLessThanOrEqual(64);
   });
 });
+
+function reqWithSocket(partial: Partial<Request> & { remoteAddress?: string }): Request {
+  const { remoteAddress, ...rest } = partial;
+  return {
+    headers: {},
+    ...rest,
+    socket: remoteAddress === undefined ? undefined : { remoteAddress },
+  } as unknown as Request;
+}
+
+describe('resolveClientIp: trustedPeers (GAP 2 — fidash peer gate)', () => {
+  it('regression guard: trustedPeers unset (default) behaves exactly like pre-1.5.0 — cf honored regardless of peer', () => {
+    const r = reqWithSocket({
+      ip: '10.0.0.1',
+      remoteAddress: '203.0.113.50',
+      headers: { 'cf-connecting-ip': '198.51.100.1' },
+    });
+    // No trustedPeers option: peer gate never engages, matching the
+    // pre-existing trustCloudflare-only behavior byte-for-byte.
+    expect(resolveClientIp(r, { trustCloudflare: true })).toBe('198.51.100.1');
+  });
+
+  it('ADVERSARIAL / CANARY TARGET: blocks a spoofed Cf-Connecting-Ip from a NON-trusted peer', () => {
+    // A direct LAN/localhost attacker who never went through Cloudflare or
+    // the reverse proxy connects straight to the Express port and forges
+    // cf-connecting-ip. Without the peer gate this would be honored.
+    const r = reqWithSocket({
+      remoteAddress: '203.0.113.66', // NOT in trustedPeers, not loopback
+      headers: { 'cf-connecting-ip': '198.51.100.1' /* spoofed */ },
+    });
+    const resolved = resolveClientIp(r, {
+      trustCloudflare: true,
+      trustedPeers: ['10.0.0.0/8', '192.168.1.5'],
+    });
+    expect(resolved).not.toBe('198.51.100.1');
+    // Falls back to the raw peer address instead — mirrors fidash's
+    // get_client_ip, which returns request.client.host unchanged.
+    expect(resolved).toBe('203.0.113.66');
+  });
+
+  it('honors Cf-Connecting-Ip from a loopback (IPv4) peer', () => {
+    const r = reqWithSocket({
+      remoteAddress: '127.0.0.1',
+      headers: { 'cf-connecting-ip': '198.51.100.1' },
+    });
+    expect(resolveClientIp(r, { trustCloudflare: true, trustedPeers: [] })).toBe('198.51.100.1');
+  });
+
+  it('honors Cf-Connecting-Ip from a loopback (IPv6 ::1) peer', () => {
+    const r = reqWithSocket({
+      remoteAddress: '::1',
+      headers: { 'cf-connecting-ip': '198.51.100.1' },
+    });
+    expect(resolveClientIp(r, { trustCloudflare: true, trustedPeers: [] })).toBe('198.51.100.1');
+  });
+
+  it('honors the header from a peer inside a configured CIDR block', () => {
+    const r = reqWithSocket({
+      remoteAddress: '10.4.5.6',
+      headers: { 'cf-connecting-ip': '198.51.100.1' },
+    });
+    expect(
+      resolveClientIp(r, { trustCloudflare: true, trustedPeers: ['10.0.0.0/8'] }),
+    ).toBe('198.51.100.1');
+  });
+
+  it('honors the header from a peer matching an exact-IP entry', () => {
+    const r = reqWithSocket({
+      remoteAddress: '192.168.1.5',
+      headers: { 'x-forwarded-for': '1.2.3.4, 203.0.113.7' },
+    });
+    expect(
+      resolveClientIp(r, { trustXff: true, trustedPeers: ['192.168.1.5'] }),
+    ).toBe('203.0.113.7');
+  });
+
+  it('rejects a peer just outside the configured CIDR block', () => {
+    const r = reqWithSocket({
+      remoteAddress: '11.0.0.1',
+      headers: { 'cf-connecting-ip': '198.51.100.1' },
+    });
+    const resolved = resolveClientIp(r, { trustCloudflare: true, trustedPeers: ['10.0.0.0/8'] });
+    expect(resolved).not.toBe('198.51.100.1');
+    expect(resolved).toBe('11.0.0.1');
+  });
+
+  it('degrades to "" (never throws) when trustedPeers is engaged but the socket is absent', () => {
+    const r = reqWithSocket({
+      remoteAddress: undefined,
+      headers: { 'cf-connecting-ip': '198.51.100.1' },
+    });
+    expect(() => resolveClientIp(r, { trustCloudflare: true, trustedPeers: [] })).not.toThrow();
+    expect(resolveClientIp(r, { trustCloudflare: true, trustedPeers: [] })).toBe('');
+  });
+});
+
+describe('resolveClientIp: uaFallback (GAP 1 — bewks UA-fingerprint fallback)', () => {
+  it('regression guard: uaFallback unset (default) falls back to req.ip, matching pre-1.5.0', () => {
+    const r = req({ ip: '10.0.0.1', headers: {} });
+    expect(resolveClientIp(r, { trustCloudflare: true })).toBe('10.0.0.1');
+  });
+
+  it('ADVERSARIAL / CANARY-ADJACENT: engages only when no trusted IP is available — mirrors bewks getClientId', () => {
+    // bewks: cf-connecting-ip ABSENT -> untrusted -> `untrusted:<ua>`.
+    const r = req({
+      ip: '10.0.0.1',
+      headers: { 'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) SomeExtraJunk' },
+    });
+    const resolved = resolveClientIp(r, { trustCloudflare: true, uaFallback: true });
+    expect(resolved).toBe(
+      `untrusted:${'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) SomeExtraJunk'.slice(0, 40)}`,
+    );
+    expect(resolved.length).toBeLessThanOrEqual(64);
+  });
+
+  it('does NOT engage when a trusted IP (Cf-Connecting-Ip) IS available — mirrors bewks trusted branch', () => {
+    const r = req({
+      headers: {
+        'cf-connecting-ip': '198.51.100.1',
+        'user-agent': 'some-ua',
+      },
+    });
+    expect(resolveClientIp(r, { trustCloudflare: true, uaFallback: true })).toBe('198.51.100.1');
+  });
+
+  it('falls back to "untrusted:no-ua" when the User-Agent header is absent, matching bewks exactly', () => {
+    const r = req({ headers: {} });
+    expect(resolveClientIp(r, { trustCloudflare: true, uaFallback: true })).toBe('untrusted:no-ua');
+  });
+
+  it('truncates the User-Agent to 40 chars, matching bewks\'s userAgent.slice(0, 40)', () => {
+    const ua = 'A'.repeat(100);
+    const r = req({ headers: { 'user-agent': ua } });
+    const resolved = resolveClientIp(r, { trustCloudflare: true, uaFallback: true });
+    expect(resolved).toBe(`untrusted:${'A'.repeat(40)}`);
+  });
+
+  it('engages ahead of the peer-gate raw-peer fallback when both options are set and no trusted IP is found', () => {
+    const r = reqWithSocket({
+      remoteAddress: '203.0.113.66',
+      headers: { 'cf-connecting-ip': '198.51.100.1' /* spoofed, untrusted peer */, 'user-agent': 'ua-x' },
+    });
+    const resolved = resolveClientIp(r, {
+      trustCloudflare: true,
+      trustedPeers: ['10.0.0.0/8'],
+      uaFallback: true,
+    });
+    expect(resolved).toBe('untrusted:ua-x');
+  });
+});

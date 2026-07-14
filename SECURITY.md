@@ -95,5 +95,6 @@ what it explicitly does **not**.
 
 ## Reporting a vulnerability
 
-Please use [GitHub Security Advisories](https://github.com/andrewpopov/express-security-kit/security/advisories/new)
-on this repository rather than a public issue.
+Do not open a public issue. Use [GitHub Security Advisories](https://github.com/andrewpopov/express-security-kit/security/advisories/new)
+with the package version, a minimal reproduction, impact, and any suggested
+mitigation.

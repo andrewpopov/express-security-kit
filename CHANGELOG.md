@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.3.2
+
+- Add public contribution, support, and private vulnerability-reporting policies.
+- Upgrade the Vitest/Vite development toolchain to remove the known development
+  dependency advisories.
+- Add `npm run verify`, including runtime and development dependency audits, as
+  the authoritative local release gate.
+
 All notable changes to `@andrewpopov/express-security-kit` are documented here.
 
 ## Release-guard format

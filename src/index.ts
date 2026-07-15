@@ -96,6 +96,8 @@ export { requireScope } from './express/api-key/requireScope';
 export type {
   ApiKeyRecord,
   KeyHasher,
+  RawApiKeyAuthenticator,
+  RawApiKeyAuthentication,
   ApiKeyStaticKey,
   ApiKeyFailureReason,
   ApiKeyAuthLogger,

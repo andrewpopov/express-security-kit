@@ -27,7 +27,7 @@ export type { ApiKeyVerifyOutcome };
 export declare const verifyApiKey: (config: ApiKeyAuthConfig, req: Request) => Promise<ApiKeyVerifyOutcome>;
 export { sha256Hasher, scopedHmacHasher, timingSafeEqualHex, } from './core/api-key/hashers';
 export { requireScope } from './express/api-key/requireScope';
-export type { ApiKeyRecord, KeyHasher, ApiKeyStaticKey, ApiKeyFailureReason, ApiKeyAuthLogger, ApiKeyErrorResponse, } from './core/api-key/types';
+export type { ApiKeyRecord, KeyHasher, RawApiKeyAuthenticator, RawApiKeyAuthentication, ApiKeyStaticKey, ApiKeyFailureReason, ApiKeyAuthLogger, ApiKeyErrorResponse, } from './core/api-key/types';
 export type { ScopePredicate, RequireScopeOptions, RequireScopeLogger, } from './express/api-key/requireScope';
 export { normalizeIp } from './core/api-key/normalizeIp';
 export { generateApiKey, parseApiKey, maskApiKey, rotateApiKey, createThrottledTouchLastUsed, } from './core/api-key/issuance';

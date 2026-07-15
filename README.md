@@ -530,6 +530,15 @@ app.use(async (req, res, next) => {
 so you can read fields your `lookup` stashed (including `record.meta`).
 `createApiKeyAuth` is itself just a thin middleware over `verifyApiKey`.
 
+### Canonical credential adapters
+
+Credential issuance, wire formats, indexed public-id lookup, and pepper
+rotation belong to `@andrewpopov/api-access-kit`. Configure `rawAuthenticator`
+when using that contract: it receives the presented raw credential and returns
+an authenticated record. This kit then applies HTTP concerns (header parsing,
+expiry/IP policy, and `SecurityContext`) without hashing the full credential or
+assuming a persistence layout. `lookup` and `hasher` remain for legacy stores.
+
 ## Module 4 — HMAC request signing + replay protection
 
 **Opt-in.** For high-value machine-to-machine routes you can require that each

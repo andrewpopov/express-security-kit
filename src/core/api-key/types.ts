@@ -3,14 +3,14 @@ import type { SecurityRequest } from '../http';
 
 /**
  * A stored API-key record, as returned by the service's `lookup`. The kit never
- * stores keys itself — the service owns persistence. `hash` is the hashed form
- * of the raw key (using the same `hasher` the verifier is configured with).
+ * stores keys itself — the service owns persistence. Legacy hash lookup uses
+ * `hash`; canonical raw authenticators do not need to expose hash material.
  */
 export interface ApiKeyRecord {
   /** Stable identifier for this key (becomes principalId/keyId by default). */
   id: string;
-  /** Hashed raw key (hex), produced by the configured KeyHasher. */
-  hash: string;
+  /** Legacy hashed raw key (hex), produced by the configured KeyHasher. */
+  hash?: string;
   /** Optional expiry; a key with `expiresAt <= now` is rejected. */
   expiresAt?: Date | null;
   /**
@@ -45,6 +45,20 @@ export interface ApiKeyRecord {
 /** Hashes a raw key into its stored (hex) form. */
 export type KeyHasher = (rawKey: string) => string;
 
+/**
+ * Host-owned credential verification seam. It receives the raw credential and
+ * performs its own indexed-id lookup and constant-time secret verification.
+ * The security kit only translates a successful record into SecurityContext.
+ */
+export type RawApiKeyAuthenticator<Req extends SecurityRequest = SecurityRequest> = (
+  rawKey: string,
+  req: Req,
+) => Promise<RawApiKeyAuthentication>;
+
+export type RawApiKeyAuthentication =
+  | { ok: true; record: ApiKeyRecord }
+  | { ok: false; reason?: Exclude<ApiKeyFailureReason, 'missing' | 'malformed' | 'bad_prefix' | 'ip_denied' | 'error'> };
+
 export interface ApiKeyStaticKey {
   /** Human name / identifier for this bootstrap key (becomes keyId). */
   name: string;
@@ -68,6 +82,12 @@ export interface ApiKeyAuthConfigCore<Req extends SecurityRequest = SecurityRequ
   hasher?: KeyHasher;
   /** Look up a stored record by hashed key. Return null when not found. */
   lookup: (hash: string) => Promise<ApiKeyRecord | null>;
+  /**
+   * Canonical credential path. When supplied, the kit does not hash or look up
+   * the raw key itself; `lookup` remains required only for legacy callers and
+   * is ignored. This lets api-access-kit own credential formats and peppers.
+   */
+  rawAuthenticator?: RawApiKeyAuthenticator<Req>;
   /**
    * Header carrying the key. Default 'authorization' (parsed as `Bearer <key>`).
    * Any other name (e.g. 'x-api-key') uses the raw trimmed header value.

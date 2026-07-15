@@ -110,18 +110,26 @@ async function verifyApiKey(config, req) {
                 },
             };
         }
-        // 4. Hash + DB lookup.
-        const computedHash = hasher(rawKey);
-        const record = await config.lookup(computedHash);
-        if (!record) {
-            return failMissing('not_found', true);
+        // 4. Canonical host-owned raw authentication, or the legacy hash lookup.
+        // The raw path is specifically for indexed public-id formats where only
+        // the secret segment is hashed; never pre-hash the whole wire credential.
+        let record;
+        if (config.rawAuthenticator) {
+            const authenticated = await config.rawAuthenticator(rawKey, req);
+            if (!authenticated.ok)
+                return failMissing(authenticated.reason ?? 'not_found', true);
+            record = authenticated.record;
         }
-        // 5. Defense in depth: constant-time compare the stored hash against the
-        //    computed hash even though lookup was keyed by hash.
-        if (!(0, hashers_1.timingSafeEqualHex)(record.hash, computedHash)) {
-            return failMissing('hash_mismatch', true);
+        else {
+            const computedHash = hasher(rawKey);
+            record = await config.lookup(computedHash);
+            if (!record)
+                return failMissing('not_found', true);
+            if (!record.hash || !(0, hashers_1.timingSafeEqualHex)(record.hash, computedHash)) {
+                return failMissing('hash_mismatch', true);
+            }
         }
-        // 6. Expiry. A present-but-invalid Date (getTime() === NaN) is treated as
+        // 5. Expiry. A present-but-invalid Date (getTime() === NaN) is treated as
         //    expired — never trust a corrupt expiry to grant access.
         if (record.expiresAt) {
             const expiryTime = record.expiresAt.getTime();
@@ -129,7 +137,7 @@ async function verifyApiKey(config, req) {
                 return failMissing('expired', true);
             }
         }
-        // 7. IP allowlist (403, not 401). Both sides are normalized (see
+        // 6. IP allowlist (403, not 401). Both sides are normalized (see
         //    normalizeIp) before comparing — otherwise a socket reporting an
         //    IPv4-mapped IPv6 address (`::ffff:203.0.113.7`, common behind some
         //    proxies/load balancers) would spuriously fail to match an allowlist
@@ -144,7 +152,7 @@ async function verifyApiKey(config, req) {
             !record.allowedIps.map(normalizeIp_1.normalizeIp).includes((0, normalizeIp_1.normalizeIp)(req.ip))) {
             return failMissing('ip_denied', true, 403);
         }
-        // 8. Build the SecurityContext.
+        // 7. Build the SecurityContext.
         const context = config.onAuthenticated
             ? await config.onAuthenticated(req, record)
             : buildDefaultContext(record);

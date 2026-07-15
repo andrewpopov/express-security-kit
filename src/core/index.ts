@@ -16,6 +16,8 @@ export type { ApiKeyVerifyOutcome } from './api-key/verifyApiKey';
 export type {
   ApiKeyRecord,
   KeyHasher,
+  RawApiKeyAuthenticator,
+  RawApiKeyAuthentication,
   ApiKeyAuthConfigCore,
   ApiKeyStaticKey,
   ApiKeyFailureReason,

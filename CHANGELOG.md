@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.6.0
+
+- Add the `rawAuthenticator` API-key verification seam for canonical indexed
+  credential contracts. It lets an owning credential kit verify the secret
+  without express-security-kit hashing the full wire credential.
+
 ## 1.3.2
 
 - Add public contribution, support, and private vulnerability-reporting policies.

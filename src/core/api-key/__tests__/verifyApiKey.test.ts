@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import type { Request } from 'express';
 import { verifyApiKey } from '../verifyApiKey';
 import { sha256Hasher } from '../hashers';
@@ -42,6 +42,19 @@ describe('verifyApiKey — presence flag', () => {
 });
 
 describe('verifyApiKey — success', () => {
+  it('delegates indexed public-id credential verification to a raw authenticator without hashing the full credential', async () => {
+    const rawAuthenticator = vi.fn(async (raw: string) => raw === 'cairn_key-1.secret-value-which-is-long-enough'
+      ? { ok: true as const, record: { id: 'key-1', scopes: ['read'] } }
+      : { ok: false as const, reason: 'not_found' as const });
+    const hasher = vi.fn(() => { throw new Error('legacy hasher must not run'); });
+    const out = await verifyApiKey(
+      { prefix: 'cairn_', lookup: async () => { throw new Error('legacy lookup must not run'); }, rawAuthenticator, hasher },
+      makeReq(bearer('cairn_key-1.secret-value-which-is-long-enough')),
+    );
+    expect(out).toMatchObject({ ok: true, context: { principalId: 'key-1', scopes: ['read'] } });
+    expect(rawAuthenticator).toHaveBeenCalledWith('cairn_key-1.secret-value-which-is-long-enough', expect.anything());
+    expect(hasher).not.toHaveBeenCalled();
+  });
   it('valid DB key → ok:true, context populated, record returned', async () => {
     const out = await verifyApiKey(
       baseConfig({ lookup: async () => record({ scopes: ['read'] }) }),

@@ -3,7 +3,7 @@ export type { SecurityContext } from './context';
 export { sha256Hasher, scopedHmacHasher, timingSafeEqualHex, } from './api-key/hashers';
 export { verifyApiKey, extractRawKey, buildDefaultContext } from './api-key/verifyApiKey';
 export type { ApiKeyVerifyOutcome } from './api-key/verifyApiKey';
-export type { ApiKeyRecord, KeyHasher, ApiKeyAuthConfigCore, ApiKeyStaticKey, ApiKeyFailureReason, ApiKeyAuthLogger, ApiKeyErrorResponse, } from './api-key/types';
+export type { ApiKeyRecord, KeyHasher, RawApiKeyAuthenticator, RawApiKeyAuthentication, ApiKeyAuthConfigCore, ApiKeyStaticKey, ApiKeyFailureReason, ApiKeyAuthLogger, ApiKeyErrorResponse, } from './api-key/types';
 export { normalizeIp } from './api-key/normalizeIp';
 export { generateApiKey, parseApiKey, maskApiKey, rotateApiKey, createThrottledTouchLastUsed, } from './api-key/issuance';
 export type { ApiKeyMaterial, GenerateApiKeyOptions, ParsedApiKey, ApiKeyStore, ApiKeyStoreRecord, ApiKeyInsertInput, ThrottledTouchLastUsedOptions, } from './api-key/issuance';

@@ -116,8 +116,15 @@ async function verifyApiKey(config, req) {
         let record;
         if (config.rawAuthenticator) {
             const authenticated = await config.rawAuthenticator(rawKey, req);
-            if (!authenticated.ok)
-                return failMissing(authenticated.reason ?? 'not_found', true);
+            if (!authenticated.ok) {
+                const reason = authenticated.reason ?? 'not_found';
+                // 'unavailable' is an infrastructure failure, not an auth failure —
+                // treat it exactly like the internal 'error' path (mirrors the catch
+                // block below): fail closed, but at errorStatus (default 503), not 401.
+                return reason === 'unavailable'
+                    ? failMissing('unavailable', true, resolveErrorStatus(config))
+                    : failMissing(reason, true);
+            }
             record = authenticated.record;
         }
         else {

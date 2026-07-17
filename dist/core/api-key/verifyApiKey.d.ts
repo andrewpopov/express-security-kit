@@ -23,8 +23,8 @@ export type ApiKeyVerifyOutcome = {
     present: boolean;
     /**
      * 403 for `ip_denied`; `config.errorStatus` (default 503) for `error`
-     * (an infrastructure failure, not an auth failure); 401 for everything
-     * else.
+     * or `unavailable` (an infrastructure failure, not an auth failure);
+     * 401 for everything else.
      */
     status: number;
 };

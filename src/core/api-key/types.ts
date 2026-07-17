@@ -57,7 +57,22 @@ export type RawApiKeyAuthenticator<Req extends SecurityRequest = SecurityRequest
 
 export type RawApiKeyAuthentication =
   | { ok: true; record: ApiKeyRecord }
-  | { ok: false; reason?: Exclude<ApiKeyFailureReason, 'missing' | 'malformed' | 'bad_prefix' | 'ip_denied' | 'error'> };
+  | {
+      ok: false;
+      /**
+       * `'unavailable'` means the authenticator's own backing infrastructure
+       * (key store, pepper ring, config) could not be consulted — e.g. a
+       * pepper ring that hasn't finished loading. It is treated exactly like
+       * the kit's internal `'error'` path: reported at `config.errorStatus`
+       * (default 503, `onError`-overridable), never 401/403, and NEVER an
+       * authentication (still fail-closed). Use it instead of throwing so the
+       * infra-vs-auth-failure distinction survives — a throw is caught by
+       * `verifyApiKey` and already maps to `'error'`, so `'unavailable'` only
+       * matters when the authenticator wants to report this INLINE rather
+       * than by throwing.
+       */
+      reason?: Exclude<ApiKeyFailureReason, 'missing' | 'malformed' | 'bad_prefix' | 'ip_denied' | 'error'>;
+    };
 
 export interface ApiKeyStaticKey {
   /** Human name / identifier for this bootstrap key (becomes keyId). */
@@ -125,11 +140,13 @@ export interface ApiKeyAuthConfigCore<Req extends SecurityRequest = SecurityRequ
   /** Logger for audit-hook rejections. Default: console. */
   logger?: ApiKeyAuthLogger;
   /**
-   * HTTP status returned when verification reason is `'error'` — the check
-   * could NOT be performed (a throwing `lookup`/`hasher`, e.g. a DB outage),
-   * as distinct from an authentication FAILURE (bad/unknown/expired key,
-   * which is always 401/403 regardless of this setting). Defaults to **503**:
-   * an infrastructure failure is not the same failure mode as a bad key, and
+   * HTTP status returned when verification reason is `'error'` or
+   * `'unavailable'` — the check could NOT be performed (a throwing
+   * `lookup`/`hasher`, e.g. a DB outage, or a `rawAuthenticator` reporting its
+   * backing infrastructure is unavailable, e.g. an unloaded pepper ring), as
+   * distinct from an authentication FAILURE (bad/unknown/expired key, which
+   * is always 401/403 regardless of this setting). Defaults to **503**: an
+   * infrastructure failure is not the same failure mode as a bad key, and
    * reporting it as 401 makes monitoring blind to outages and causes clients
    * to treat valid keys as revoked and re-provision. This knob only changes
    * the status/body of the failure response — it can NEVER turn an
@@ -137,11 +154,12 @@ export interface ApiKeyAuthConfigCore<Req extends SecurityRequest = SecurityRequ
    */
   errorStatus?: number;
   /**
-   * Optional full override of the response sent when reason is `'error'`.
-   * Return `{ status, body }` to customize both; return/resolve nothing to
-   * fall back to `errorStatus`. May be async. A throw or rejection here is
-   * caught and logged, and the `errorStatus` default is used instead — this
-   * hook can never itself cause an allow or leave the request unanswered.
+   * Optional full override of the response sent when reason is `'error'` or
+   * `'unavailable'`. Return `{ status, body }` to customize both;
+   * return/resolve nothing to fall back to `errorStatus`. May be async. A
+   * throw or rejection here is caught and logged, and the `errorStatus`
+   * default is used instead — this hook can never itself cause an allow or
+   * leave the request unanswered.
    */
   onError?: (
     req: Req,
@@ -168,4 +186,5 @@ export type ApiKeyFailureReason =
   | 'hash_mismatch'
   | 'expired'
   | 'ip_denied'
-  | 'error';
+  | 'error'
+  | 'unavailable';

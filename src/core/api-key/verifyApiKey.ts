@@ -29,8 +29,8 @@ export type ApiKeyVerifyOutcome =
       present: boolean;
       /**
        * 403 for `ip_denied`; `config.errorStatus` (default 503) for `error`
-       * (an infrastructure failure, not an auth failure); 401 for everything
-       * else.
+       * or `unavailable` (an infrastructure failure, not an auth failure);
+       * 401 for everything else.
        */
       status: number;
     };
@@ -180,7 +180,15 @@ export async function verifyApiKey<Req extends SecurityRequest = SecurityRequest
     let record: ApiKeyRecord | null;
     if (config.rawAuthenticator) {
       const authenticated = await config.rawAuthenticator(rawKey, req);
-      if (!authenticated.ok) return failMissing(authenticated.reason ?? 'not_found', true);
+      if (!authenticated.ok) {
+        const reason = authenticated.reason ?? 'not_found';
+        // 'unavailable' is an infrastructure failure, not an auth failure —
+        // treat it exactly like the internal 'error' path (mirrors the catch
+        // block below): fail closed, but at errorStatus (default 503), not 401.
+        return reason === 'unavailable'
+          ? failMissing('unavailable', true, resolveErrorStatus(config))
+          : failMissing(reason, true);
+      }
       record = authenticated.record;
     } else {
       const computedHash = hasher(rawKey);

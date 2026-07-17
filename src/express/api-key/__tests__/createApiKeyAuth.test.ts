@@ -463,3 +463,55 @@ describe('createApiKeyAuth — generic responses & fail-closed', () => {
     expect(warn).toHaveBeenCalled();
   });
 });
+
+describe('createApiKeyAuth — rawAuthenticator unavailable (infra unreachable, e.g. an unloaded pepper ring)', () => {
+  const unavailableAuthenticator = async () => ({ ok: false as const, reason: 'unavailable' as const });
+
+  it('fails CLOSED (503 by default, not 401), calling onFailure(unavailable)', async () => {
+    const onFailure = vi.fn();
+    const out = await invoke(
+      createApiKeyAuth(baseConfig({ onFailure, rawAuthenticator: unavailableAuthenticator })),
+      makeReq(bearer(RAW)),
+    );
+    expect(out.status).toBe(503);
+    expect(out.body).toEqual({
+      error: { code: 'SERVICE_UNAVAILABLE', message: 'Service Unavailable' },
+    });
+    expect(out.nextCalled).toBe(false); // NOT allowed through
+    expect(onFailure).toHaveBeenCalledWith(expect.anything(), 'unavailable');
+  });
+
+  it('honors errorStatus, exactly like the internal error path', async () => {
+    const out = await invoke(
+      createApiKeyAuth(baseConfig({ errorStatus: 500, rawAuthenticator: unavailableAuthenticator })),
+      makeReq(bearer(RAW)),
+    );
+    expect(out.status).toBe(500);
+    expect(out.body).toEqual({
+      error: { code: 'INTERNAL_ERROR', message: 'Internal Server Error' },
+    });
+  });
+
+  it('honors onError override, exactly like the internal error path', async () => {
+    const out = await invoke(
+      createApiKeyAuth(
+        baseConfig({
+          rawAuthenticator: unavailableAuthenticator,
+          onError: async () => ({ status: 502, body: { custom: true } }),
+        }),
+      ),
+      makeReq(bearer(RAW)),
+    );
+    expect(out.status).toBe(502);
+    expect(out.body).toEqual({ custom: true });
+  });
+
+  it('never authenticates, even in optional mode', async () => {
+    const out = await invoke(
+      createApiKeyAuth(baseConfig({ optional: true, rawAuthenticator: unavailableAuthenticator })),
+      makeReq(bearer(RAW)),
+    );
+    expect(out.nextCalled).toBe(false);
+    expect(out.status).toBe(503);
+  });
+});

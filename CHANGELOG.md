@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.7.0
+
+- Add an `'unavailable'` failure reason to the `rawAuthenticator` seam
+  (`RawApiKeyAuthentication`), for when the authenticator's own backing
+  infrastructure — a key store, a pepper ring, unloaded config — can't be
+  consulted. It's treated exactly like the kit's internal `'error'` path:
+  reported at `config.errorStatus` (default 503, `onError`-overridable),
+  never 401/403, and it can never authenticate — still fail-closed. Lets
+  consumers (e.g. an unloaded pepper ring) surface a retryable 503 from
+  inside the seam instead of an availability pre-check outside it.
+- **Compatibility note:** this widens the exported `ApiKeyFailureReason`
+  union. TypeScript consumers that exhaustively narrow the reason (a
+  `switch` with no `default`, or narrowly typed `onFailure` callbacks)
+  must add a case for `'unavailable'` when upgrading. Runtime behavior of
+  all existing reasons is unchanged.
+
 ## 1.6.0
 
 - Add the `rawAuthenticator` API-key verification seam for canonical indexed

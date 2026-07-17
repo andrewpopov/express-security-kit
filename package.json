@@ -4,9 +4,18 @@
   "description": "Dependency-light Express security library. Owns the machinery (helmet preset, rate limiter); consuming services inject all policy.",
   "author": "Andrew Popov",
   "license": "MIT",
-  "repository": { "type": "git", "url": "https://github.com/andrewpopov/express-security-kit.git" },
+  "repository": { "type": "git", "url": "git+https://github.com/andrewpopov/express-security-kit.git" },
   "bugs": { "url": "https://github.com/andrewpopov/express-security-kit/issues" },
   "homepage": "https://github.com/andrewpopov/express-security-kit#readme",
+  "keywords": [
+    "express",
+    "security",
+    "helmet",
+    "rate-limiter",
+    "hmac",
+    "api-key",
+    "typescript"
+  ],
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {

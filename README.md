@@ -16,7 +16,7 @@ you use the Redis store subpath.
 This package is distributed via GitHub tags (not npm):
 
 ```bash
-npm install github:andrewpopov/express-security-kit#v1.6.0
+npm install github:andrewpopov/express-security-kit#v1.7.0
 ```
 
 Peers (you almost certainly already have these):

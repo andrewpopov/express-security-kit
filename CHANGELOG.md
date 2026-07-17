@@ -6,6 +6,18 @@
   credential contracts. It lets an owning credential kit verify the secret
   without express-security-kit hashing the full wire credential.
 
+## 1.5.0
+
+- `resolveClientIp`: user-agent fallback and peer-gating so the resolver is a
+  true superset of the hand-rolled consumer implementations it replaces. (#23)
+
+## 1.4.0
+
+- **Security — rate limiting now resolves the real client IP behind a proxy.**
+  A per-IP limiter keyed on the raw socket address was spoofable via forwarded
+  headers. (#22)
+- Upgrade dev test tooling and the audit gate. (#20)
+
 ## 1.3.2
 
 - Add public contribution, support, and private vulnerability-reporting policies.

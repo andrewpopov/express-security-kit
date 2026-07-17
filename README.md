@@ -539,6 +539,31 @@ an authenticated record. This kit then applies HTTP concerns (header parsing,
 expiry/IP policy, and `SecurityContext`) without hashing the full credential or
 assuming a persistence layout. `lookup` and `hasher` remain for legacy stores.
 
+**Reporting infrastructure unavailability.** If the authenticator's own
+backing infrastructure — a key store, a pepper ring, unloaded config — can't be
+consulted, return `{ ok: false, reason: 'unavailable' }` instead of throwing or
+returning `not_found`. It's treated exactly like the kit's own internal
+`'error'` path: reported at `config.errorStatus` (default **503**,
+`onError`-overridable), never 401/403, and it can never authenticate — still
+fail-closed. This is for a smarthome-style pepper ring that hasn't finished
+loading at request time:
+
+```ts
+const rawAuthenticator: RawApiKeyAuthenticator = async (rawKey) => {
+  if (!pepperRing.isLoaded()) {
+    // Infra can't be consulted — a 503, not a 401: don't make monitoring
+    // blind to the outage or cause clients to treat valid keys as revoked.
+    return { ok: false, reason: 'unavailable' };
+  }
+  const record = await pepperRing.verify(rawKey);
+  return record ? { ok: true, record } : { ok: false, reason: 'not_found' };
+};
+```
+
+A throwing `rawAuthenticator` is caught by `verifyApiKey` and already maps to
+`reason: 'error'` with the same 503 treatment — `'unavailable'` exists for when
+the authenticator wants to report this inline, without throwing.
+
 ## Module 4 — HMAC request signing + replay protection
 
 **Opt-in.** For high-value machine-to-machine routes you can require that each

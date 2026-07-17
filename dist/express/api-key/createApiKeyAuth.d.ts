@@ -11,11 +11,13 @@ export type ApiKeyAuthConfig = ApiKeyAuthConfigCore<Request>;
  * rate limiter, which fails open. Only the `onFailure` audit hook receives
  * the specific reason.
  *
- * A `reason: 'error'` outcome (the check could not be performed — e.g. a DB
- * outage) is DELIBERATELY distinct from an auth failure: it responds with
- * `config.errorStatus` (default **503**, not 401) — see `ApiKeyAuthConfig`.
- * A DB outage reported as 401 makes monitoring blind to the outage and
- * causes clients to treat valid keys as revoked and re-provision.
+ * A `reason: 'error'` or `reason: 'unavailable'` outcome (the check could not
+ * be performed — e.g. a DB outage, or a `rawAuthenticator` reporting its
+ * backing infrastructure is unavailable) is DELIBERATELY distinct from an
+ * auth failure: it responds with `config.errorStatus` (default **503**, not
+ * 401) — see `ApiKeyAuthConfig`. A DB outage reported as 401 makes monitoring
+ * blind to the outage and causes clients to treat valid keys as revoked and
+ * re-provision.
  *
  * This is a thin middleware wrapper around {@link verifyApiKey}: it applies the
  * `optional`-passthrough policy and translates the verification outcome into an

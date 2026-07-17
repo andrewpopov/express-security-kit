@@ -241,3 +241,36 @@ describe('verifyApiKey — meta passthrough', () => {
     expect(out.record?.meta).toEqual({ orgId: 'x' });
   });
 });
+
+describe('verifyApiKey — rawAuthenticator unavailable (infra unreachable, e.g. an unloaded pepper ring)', () => {
+  const unavailableAuthenticator = async () => ({ ok: false as const, reason: 'unavailable' as const });
+
+  it('→ ok:false, reason:unavailable, present:true, 503 by default', async () => {
+    const out = await verifyApiKey(
+      { prefix: PREFIX, lookup: async () => { throw new Error('legacy lookup must not run'); }, rawAuthenticator: unavailableAuthenticator },
+      makeReq(bearer(RAW)),
+    );
+    expect(out).toEqual({ ok: false, reason: 'unavailable', present: true, status: 503 });
+  });
+
+  it('honors config.errorStatus, exactly like the internal error path', async () => {
+    const out = await verifyApiKey(
+      { prefix: PREFIX, lookup: async () => null, rawAuthenticator: unavailableAuthenticator, errorStatus: 500 },
+      makeReq(bearer(RAW)),
+    );
+    expect(out).toEqual({ ok: false, reason: 'unavailable', present: true, status: 500 });
+  });
+
+  it('never authenticates — ok is always false regardless of any other config', async () => {
+    const out = await verifyApiKey(
+      {
+        prefix: PREFIX,
+        lookup: async () => null,
+        rawAuthenticator: unavailableAuthenticator,
+        onAuthenticated: () => { throw new Error('onAuthenticated must not run when unavailable'); },
+      },
+      makeReq(bearer(RAW)),
+    );
+    expect(out.ok).toBe(false);
+  });
+});

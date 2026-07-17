@@ -32,11 +32,13 @@ function defaultErrorBody(status) {
  * rate limiter, which fails open. Only the `onFailure` audit hook receives
  * the specific reason.
  *
- * A `reason: 'error'` outcome (the check could not be performed — e.g. a DB
- * outage) is DELIBERATELY distinct from an auth failure: it responds with
- * `config.errorStatus` (default **503**, not 401) — see `ApiKeyAuthConfig`.
- * A DB outage reported as 401 makes monitoring blind to the outage and
- * causes clients to treat valid keys as revoked and re-provision.
+ * A `reason: 'error'` or `reason: 'unavailable'` outcome (the check could not
+ * be performed — e.g. a DB outage, or a `rawAuthenticator` reporting its
+ * backing infrastructure is unavailable) is DELIBERATELY distinct from an
+ * auth failure: it responds with `config.errorStatus` (default **503**, not
+ * 401) — see `ApiKeyAuthConfig`. A DB outage reported as 401 makes monitoring
+ * blind to the outage and causes clients to treat valid keys as revoked and
+ * re-provision.
  *
  * This is a thin middleware wrapper around {@link verifyApiKey}: it applies the
  * `optional`-passthrough policy and translates the verification outcome into an
@@ -59,11 +61,13 @@ function createApiKeyAuth(config) {
                 logger.warn('[express-security-kit] onFailure hook threw', err);
             }
         }
-        if (reason === 'error') {
-            // Infrastructure failure: `status` here is already `errorStatus`
-            // (resolved by verifyApiKey). `onError` may further customize the
-            // status/body; a throw/rejection from it falls back to the default —
-            // it can never turn this into an allow or leave the response unsent.
+        if (reason === 'error' || reason === 'unavailable') {
+            // Infrastructure failure (internal 'error', or a rawAuthenticator
+            // reporting 'unavailable' — e.g. an unloaded pepper ring): `status`
+            // here is already `errorStatus` (resolved by verifyApiKey). `onError`
+            // may further customize the status/body; a throw/rejection from it
+            // falls back to the default — it can never turn this into an allow or
+            // leave the response unsent.
             let response = { status };
             if (config.onError) {
                 try {

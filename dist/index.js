@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.normalizeOrigin = exports.resolveCorsPolicy = exports.createWebhookVerifier = exports.verifyWebhookSignature = exports.auditDeniedHook = exports.auditRateLimitHook = exports.auditFailureHook = exports.buildAuditEvent = exports.ConsoleAuditSink = exports.AuditBuffer = exports.MemoryNonceStore = exports.createRequestSigningVerifier = exports.sha256Hex = exports.signRequest = exports.buildCanonicalString = exports.createThrottledTouchLastUsed = exports.rotateApiKey = exports.maskApiKey = exports.parseApiKey = exports.generateApiKey = exports.normalizeIp = exports.requireScope = exports.timingSafeEqualHex = exports.scopedHmacHasher = exports.sha256Hasher = exports.verifyApiKey = exports.createApiKeyAuth = exports.resolveClientIp = exports.verifiedIdentityKeyResolved = exports.ipKeyResolved = exports.decodedJwtKey = exports.defaultKeyGenerator = exports.verifiedIdentityKey = exports.ipKey = exports.MemoryRateLimitStore = exports.createRateLimiter = exports.createHelmetMiddleware = void 0;
+exports.redactFields = exports.redactUrl = exports.normalizeOrigin = exports.resolveCorsPolicy = exports.createWebhookVerifier = exports.verifyWebhookSignature = exports.auditDeniedHook = exports.auditRateLimitHook = exports.auditFailureHook = exports.buildAuditEvent = exports.ConsoleAuditSink = exports.AuditBuffer = exports.MemoryNonceStore = exports.createRequestSigningVerifier = exports.sha256Hex = exports.signRequest = exports.buildCanonicalString = exports.createThrottledTouchLastUsed = exports.rotateApiKey = exports.maskApiKey = exports.parseApiKey = exports.generateApiKey = exports.normalizeIp = exports.requireScope = exports.timingSafeEqualHex = exports.scopedHmacHasher = exports.sha256Hasher = exports.verifyApiKey = exports.createApiKeyAuth = exports.resolveClientIp = exports.verifiedIdentityKeyResolved = exports.ipKeyResolved = exports.hmacBodyFieldKey = exports.decodedJwtKey = exports.defaultKeyGenerator = exports.verifiedIdentityKey = exports.ipKey = exports.MemoryRateLimitStore = exports.createRateLimiter = exports.createHelmetMiddleware = void 0;
 // Side-effect import: merges the `securityContext`/`rawBody` fields onto the
 // ambient `Express.Request` type. MUST be a value import (not `import type`)
 // so the augmentation is actually loaded by root consumers.
@@ -25,6 +25,7 @@ exports.ipKey = keyGenerator_1.ipKey;
 exports.verifiedIdentityKey = keyGenerator_1.verifiedIdentityKey;
 exports.defaultKeyGenerator = keyGenerator_1.defaultKeyGenerator;
 exports.decodedJwtKey = keyGenerator_1.decodedJwtKey;
+exports.hmacBodyFieldKey = keyGenerator_1.hmacBodyFieldKey;
 exports.ipKeyResolved = keyGenerator_1.ipKeyResolved;
 exports.verifiedIdentityKeyResolved = keyGenerator_1.verifiedIdentityKeyResolved;
 // Client-IP resolution (ROG-1094): framework-agnostic, so it's a safe direct
@@ -100,6 +101,13 @@ Object.defineProperty(exports, "normalizeOrigin", { enumerable: true, get: funct
 // `@types/cors` fails to type-check `import { corsOptions } from '<pkg>'`
 // with `TS2307: Cannot find module 'cors'`. `resolveCorsPolicy` and
 // `normalizeOrigin` above have no such dependency and are safe on root.
+// Log redaction: already framework-agnostic (operate on plain strings/
+// objects, not `Request`), so both are safe direct re-exports — no
+// Request-pinning wrapper needed, same reasoning as `resolveClientIp` above.
+var redactUrl_1 = require("./core/redact/redactUrl");
+Object.defineProperty(exports, "redactUrl", { enumerable: true, get: function () { return redactUrl_1.redactUrl; } });
+var redactFields_1 = require("./core/redact/redactFields");
+Object.defineProperty(exports, "redactFields", { enumerable: true, get: function () { return redactFields_1.redactFields; } });
 // Note: the Redis store is intentionally NOT exported here. Import it from the
 // '@andrewpopov/express-security-kit/redis-store' subpath so the core entry
 // never references ioredis.

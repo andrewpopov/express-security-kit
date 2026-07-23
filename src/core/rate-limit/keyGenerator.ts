@@ -1,3 +1,4 @@
+import { createHmac } from 'node:crypto';
 import type { SecurityRequest } from '../http';
 import {
   resolveClientIp,
@@ -174,6 +175,90 @@ export function decodedJwtKey<Req extends SecurityRequest = SecurityRequest>(
         return `${prefix}:${value}`;
       }
       return safeFallback(req);
+    } catch {
+      // Defense in depth: this strategy must never throw.
+      return safeFallback(req);
+    }
+  };
+}
+
+export interface HmacBodyFieldKeyOptionsCore<Req extends SecurityRequest = SecurityRequest> {
+  /** Request-body field to key on, e.g. 'email'. */
+  field: string;
+  /** HMAC-SHA256 secret. */
+  secret: string;
+  /** Prefix for the emitted key. Default 'acct'. */
+  prefix?: string;
+  /**
+   * Normalize the raw field value before hashing. Default identity — pass
+   * one that matches the same canonical form your auth lookup uses (e.g.
+   * lowercase + trim an email), so the rate-limit key lines up with the
+   * account the login attempt is actually against.
+   */
+  canonicalize?: (raw: string) => string;
+  /** Key generator used when the field is missing/non-string. Default ipKey. */
+  fallback?: KeyGeneratorCore<Req>;
+}
+
+/**
+ * Factory for a Tier-2 PER-ACCOUNT keying strategy for a FAILED-login
+ * limiter: keys on an HMAC-SHA256 of a request-body field (typically the
+ * login identifier, e.g. 'email'), so many distinct IPs credential-stuffing
+ * the SAME account still land in one shared bucket instead of each getting
+ * their own budget. Intended to be paired with `skipSuccessful` so
+ * successful logins don't consume the budget — only failed attempts against
+ * a given account count.
+ *
+ * The field value is run through `canonicalize` (default identity — pass a
+ * canonicalizer matching your auth lookup's normalization, e.g.
+ * lowercase+trim an email) BEFORE hashing, so the key aligns with the same
+ * account across superficial input variants. It is then HMAC'd — never used
+ * raw — so the rate-limit store never holds a plaintext email/identifier,
+ * only an opaque digest keyed on `secret`.
+ *
+ * Reads the body defensively: `SecurityRequest` does not type `body`, so it
+ * is accessed via a narrowed cast rather than `any`. NEVER throws — any
+ * failure (missing/non-string field, hashing error, a throwing fallback) is
+ * caught and degrades to {@link ipKey}, mirroring {@link decodedJwtKey}'s
+ * total-function discipline.
+ */
+export function hmacBodyFieldKey<Req extends SecurityRequest = SecurityRequest>(
+  opts: HmacBodyFieldKeyOptionsCore<Req>,
+): KeyGeneratorCore<Req> {
+  const { field, secret } = opts;
+  // Fail fast at WIRING time (not per-request): a missing/empty secret would
+  // make the HMAC keys forgeable and silently weaken the per-account limiter.
+  // This throws when you build the limiter, never inside the request path.
+  if (typeof secret !== 'string' || secret.length === 0) {
+    throw new Error('hmacBodyFieldKey: a non-empty `secret` is required');
+  }
+  if (typeof field !== 'string' || field.length === 0) {
+    throw new Error('hmacBodyFieldKey: a non-empty `field` is required');
+  }
+  const prefix = opts.prefix ?? 'acct';
+  const canonicalize = opts.canonicalize ?? ((raw: string) => raw);
+  const fallback = opts.fallback ?? ipKey;
+
+  /** Run the configured fallback, but never let IT throw either. */
+  const safeFallback = (req: Req): string => {
+    try {
+      return fallback(req);
+    } catch {
+      // Final guard: even a throwing custom fallback must not break the
+      // never-throws guarantee. ipKey is total (never throws).
+      return ipKey(req);
+    }
+  };
+
+  return (req: Req): string => {
+    try {
+      const body = (req as { body?: Record<string, unknown> }).body;
+      const value = body?.[field];
+      if (typeof value !== 'string' || value.length === 0) {
+        return safeFallback(req);
+      }
+      const hmacHex = createHmac('sha256', secret).update(canonicalize(value)).digest('hex');
+      return `${prefix}:${hmacHex}`;
     } catch {
       // Defense in depth: this strategy must never throw.
       return safeFallback(req);

@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.8.0
+
+- **Log redaction (new `Module 6`).** Two pure, framework-agnostic helpers for
+  keeping credentials out of log sinks:
+  - `redactUrl(url, { sensitiveParams, sensitiveSegments, placeholder })` —
+    strips secrets from a URL/path (query-param values + path segments following
+    marker segments, e.g. `/invites/:token`, `/invite/:token`). Preserves
+    non-sensitive params and order; never throws.
+  - `redactFields(value, { fields, recurse, placeholder })` — deep-copy object
+    field redaction to any depth (exact-case keys, array-aware, cycle-safe).
+    Never mutates input and **fails closed** — on an internal error it returns
+    the placeholder rather than the unredacted original.
+- **`hmacBodyFieldKey({ field, secret, canonicalize?, prefix?, fallback? })`** —
+  a rate-limit key generator that keys on an HMAC-SHA256 of a request-body field
+  (a canonical account identifier). Intended for a Tier-2 per-account
+  **failed-login** limiter paired with `skipSuccessful`, so distributed
+  credential-stuffing against one account shares a single bucket. With
+  `skipSuccessful` a successful login refunds only its own hit — it does NOT
+  reset earlier failures (those age out with the window); call `store.reset(key)`
+  on success if you want a correct password to clear the account immediately.
+  Falls back to `ipKey` when the field is absent/non-string; throws at
+  construction on an empty secret/field but never per request. The store only
+  ever holds the opaque digest, never the raw identifier. `canonicalize`
+  (default identity) must match your auth lookup's normalization, or spelling
+  variants of one account get separate buckets.
+- Additive only — no changes to existing exports or runtime behavior.
+
 ## 1.7.0
 
 - Add an `'unavailable'` failure reason to the `rawAuthenticator` seam

@@ -7,13 +7,16 @@ export type { RateLimiterConfig, RateLimitAlgorithm, RateLimitOverride, RateLimi
 export type { KeyGenerator } from './express/rate-limit/createRateLimiter';
 export { MemoryRateLimitStore } from './core/rate-limit/store';
 export type { RateLimitStore, HitResult, MemoryRateLimitStoreOptions, } from './core/rate-limit/store';
-import type { KeyGeneratorCore, DecodedJwtKeyOptionsCore, ClientIpResolutionOptions } from './core/rate-limit/keyGenerator';
+import type { KeyGeneratorCore, DecodedJwtKeyOptionsCore, HmacBodyFieldKeyOptionsCore, ClientIpResolutionOptions } from './core/rate-limit/keyGenerator';
 /** Express-pinned alias: same shape as the pre-carve `DecodedJwtKeyOptions`. */
 export type DecodedJwtKeyOptions = DecodedJwtKeyOptionsCore<Request>;
 export declare const ipKey: KeyGeneratorCore<Request>;
 export declare const verifiedIdentityKey: KeyGeneratorCore<Request>;
 export declare const defaultKeyGenerator: KeyGeneratorCore<Request>;
 export declare const decodedJwtKey: (opts?: DecodedJwtKeyOptions) => KeyGeneratorCore<Request>;
+/** Express-pinned alias: same shape as `HmacBodyFieldKeyOptionsCore<Request>`. */
+export type HmacBodyFieldKeyOptions = HmacBodyFieldKeyOptionsCore<Request>;
+export declare const hmacBodyFieldKey: (opts: HmacBodyFieldKeyOptions) => KeyGeneratorCore<Request>;
 export type { ClientIpResolutionOptions };
 export declare const ipKeyResolved: (options?: ClientIpResolutionOptions) => KeyGeneratorCore<Request>;
 export declare const verifiedIdentityKeyResolved: (options?: ClientIpResolutionOptions) => KeyGeneratorCore<Request>;
@@ -59,3 +62,7 @@ export { createWebhookVerifier } from './express/webhook/createWebhookVerifier';
 export type { WebhookVerifierLogger, WebhookVerifierExpressConfig, WebhookVerifierConfig, } from './express/webhook/createWebhookVerifier';
 export { resolveCorsPolicy, normalizeOrigin } from './core/cors/policy';
 export type { CorsPolicyConfig, CorsPolicy, CorsRejectHook } from './core/cors/policy';
+export { redactUrl } from './core/redact/redactUrl';
+export type { RedactUrlOptions } from './core/redact/redactUrl';
+export { redactFields } from './core/redact/redactFields';
+export type { RedactFieldsOptions } from './core/redact/redactFields';

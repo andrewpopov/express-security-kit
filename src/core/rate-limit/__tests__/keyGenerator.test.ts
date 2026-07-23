@@ -1,3 +1,4 @@
+import { createHmac } from 'node:crypto';
 import { describe, it, expect } from 'vitest';
 import type { Request } from 'express';
 import {
@@ -7,6 +8,7 @@ import {
   decodedJwtKey,
   ipKeyResolved,
   verifiedIdentityKeyResolved,
+  hmacBodyFieldKey,
 } from '../keyGenerator';
 
 function req(partial: Partial<Request>): Request {
@@ -165,5 +167,112 @@ describe('decodedJwtKey', () => {
     for (const h of hostile) {
       expect(() => gen(req(h as Partial<Request>))).not.toThrow();
     }
+  });
+});
+
+describe('hmacBodyFieldKey', () => {
+  const secret = 'test-secret';
+
+  it('keys on an HMAC-SHA256 of the configured body field', () => {
+    const gen = hmacBodyFieldKey({ field: 'email', secret });
+    const r = req({ body: { email: 'a@example.com' } } as Partial<Request>);
+    const expected = createHmac('sha256', secret).update('a@example.com').digest('hex');
+    expect(gen(r)).toBe(`acct:${expected}`);
+  });
+
+  it('is stable for the same input across calls', () => {
+    const gen = hmacBodyFieldKey({ field: 'email', secret });
+    const r = req({ body: { email: 'a@example.com' } } as Partial<Request>);
+    expect(gen(r)).toBe(gen(r));
+  });
+
+  it('produces different keys for different inputs', () => {
+    const gen = hmacBodyFieldKey({ field: 'email', secret });
+    const r1 = req({ body: { email: 'a@example.com' } } as Partial<Request>);
+    const r2 = req({ body: { email: 'b@example.com' } } as Partial<Request>);
+    expect(gen(r1)).not.toBe(gen(r2));
+  });
+
+  it('applies canonicalize before hashing', () => {
+    const gen = hmacBodyFieldKey({
+      field: 'email',
+      secret,
+      canonicalize: (raw) => raw.trim().toLowerCase(),
+    });
+    const r1 = req({ body: { email: '  A@Example.com  ' } } as Partial<Request>);
+    const r2 = req({ body: { email: 'a@example.com' } } as Partial<Request>);
+    expect(gen(r1)).toBe(gen(r2));
+  });
+
+  it('supports a custom prefix', () => {
+    const gen = hmacBodyFieldKey({ field: 'email', secret, prefix: 'login' });
+    const r = req({ body: { email: 'a@example.com' } } as Partial<Request>);
+    expect(gen(r)).toMatch(/^login:/);
+  });
+
+  it('falls back to ipKey when the field is missing', () => {
+    const gen = hmacBodyFieldKey({ field: 'email', secret });
+    expect(gen(req({ ip: '1.2.3.4', body: {} } as Partial<Request>))).toBe('ip:1.2.3.4');
+  });
+
+  it('falls back to ipKey when the field is empty', () => {
+    const gen = hmacBodyFieldKey({ field: 'email', secret });
+    expect(gen(req({ ip: '1.2.3.4', body: { email: '' } } as Partial<Request>))).toBe('ip:1.2.3.4');
+  });
+
+  it('falls back to ipKey when the field is non-string', () => {
+    const gen = hmacBodyFieldKey({ field: 'email', secret });
+    expect(gen(req({ ip: '1.2.3.4', body: { email: 12345 } } as Partial<Request>))).toBe('ip:1.2.3.4');
+  });
+
+  it('falls back to ipKey when body is absent', () => {
+    const gen = hmacBodyFieldKey({ field: 'email', secret });
+    expect(gen(req({ ip: '9.9.9.9' } as Partial<Request>))).toBe('ip:9.9.9.9');
+  });
+
+  it('uses a custom fallback generator', () => {
+    const gen = hmacBodyFieldKey({ field: 'email', secret, fallback: () => 'custom-fallback' });
+    expect(gen(req({ body: {} } as Partial<Request>))).toBe('custom-fallback');
+  });
+
+  it('never throws even when a custom fallback throws (final guard -> ip)', () => {
+    const gen = hmacBodyFieldKey({
+      field: 'email',
+      secret,
+      fallback: () => {
+        throw new Error('fallback boom');
+      },
+    });
+    let key!: string;
+    expect(() => {
+      key = gen(req({ ip: '5.5.5.5', body: {} } as Partial<Request>));
+    }).not.toThrow();
+    expect(key).toBe('ip:5.5.5.5');
+  });
+
+  it('never throws on hostile input', () => {
+    const gen = hmacBodyFieldKey({ field: 'email', secret });
+    const hostile = [
+      { body: null },
+      { body: 'not-an-object' },
+      { body: { email: { nested: true } } },
+      {},
+    ];
+    for (const h of hostile) {
+      expect(() => gen(req(h as Partial<Request>))).not.toThrow();
+    }
+  });
+
+  // Hardening (Codex review): a forgeable/empty secret must fail fast at wiring
+  // time, never silently produce a weak limiter that runs per request.
+  it('throws at construction on an empty or non-string secret', () => {
+    expect(() => hmacBodyFieldKey({ field: 'email', secret: '' })).toThrow(/secret/);
+    expect(() =>
+      hmacBodyFieldKey({ field: 'email', secret: undefined as unknown as string }),
+    ).toThrow(/secret/);
+  });
+
+  it('throws at construction on an empty field', () => {
+    expect(() => hmacBodyFieldKey({ field: '', secret })).toThrow(/field/);
   });
 });

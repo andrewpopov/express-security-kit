@@ -16,7 +16,7 @@ you use the Redis store subpath.
 This package is distributed via GitHub tags (not npm):
 
 ```bash
-npm install github:andrewpopov/express-security-kit#v1.7.0
+npm install github:andrewpopov/express-security-kit#v1.8.0
 ```
 
 Peers (you almost certainly already have these):
@@ -150,6 +150,19 @@ Keying is a composable toolkit, not a single hardcoded default:
 - **`decodedJwtKey(opts?)`** → factory. **Decodes (does NOT verify)** the Bearer
   JWT and keys on a claim (default `sub`), falling back to `ipKey` on any
   missing/garbage token. It never throws.
+- **`hmacBodyFieldKey({ field, secret, canonicalize?, prefix?, fallback? })`** →
+  factory. Keys on an **HMAC-SHA256 of a request-body field** (a canonical
+  account identifier, e.g. `email`), so many IPs credential-stuffing the *same*
+  account share one bucket. The value is `canonicalize`d (default identity —
+  match your auth lookup's normalization) then HMAC'd, so the store never holds
+  a plaintext identifier. Falls back to `ipKey` when the field is
+  missing/non-string; throws at construction on an empty `secret`/`field`, but
+  never per request. Pair with **`skipSuccessful`** (below) for a per-account
+  **failed-login** limiter: a successful login refunds *its own* hit so it never
+  spends budget, but note `skipSuccessful` does **not** reset earlier failures —
+  they age out with the window. If you want a correct password to CLEAR the
+  account's accrued failures immediately, call `store.reset(key)` on login
+  success. The body must already be parsed (mount after `express.json()`).
 
   *Why decode-without-verify is OK here:* rate limiting runs *before* auth, so we
   can't yet trust the token — but keying on the claimed subject gives per-caller
@@ -766,6 +779,54 @@ process.on('SIGTERM', async () => {
 > front and retried on the next flush. Events buffered in memory are lost on a
 > hard crash; a durable sink minimizes the window, and `close()` drains on
 > graceful shutdown.
+
+## Module 6 — Log redaction
+
+Two pure, framework-agnostic helpers for keeping credentials out of your log
+sinks. The kit owns the **machinery**; you inject the **policy** (which query
+params, path segments, and field names are sensitive).
+
+**`redactUrl(url, options?)`** — strip secrets from a URL/path before it reaches
+an access log, telemetry line, or audit row. Credentials routinely ride in URLs
+(reset/confirm `?token=`, invite path segments), and those URLs fan out to
+morgan, APM, and DB audit trails.
+
+```ts
+import { redactUrl } from '@andrewpopov/express-security-kit';
+
+const opts = {
+  sensitiveParams: ['token', 'invite'],
+  sensitiveSegments: { afterSegments: ['invites', 'invite'] },
+};
+
+redactUrl('/reset-password?token=abc123&next=/home', opts);
+// → '/reset-password?token=REDACTED&next=/home'
+redactUrl('/api/invites/abc123/accept', opts);
+// → '/api/invites/REDACTED/accept'
+```
+
+- Query redaction matches param names **case-insensitively**, replaces only the
+  value, and preserves every other param and its order.
+- `sensitiveSegments.afterSegments` redacts the segment **immediately following**
+  each marker segment (case-insensitive), for path-embedded tokens.
+- The `#fragment` and leading slash are preserved. **Never throws** — malformed
+  input returns the placeholder, preferring over-redaction to a leak.
+
+**`redactFields(value, { fields, recurse?, placeholder? })`** — deep-copy an
+object with sensitive keys replaced, at any depth (`recurse` default `true`).
+Exact-case key matching; arrays are traversed; cycles are broken.
+
+```ts
+import { redactFields } from '@andrewpopov/express-security-kit';
+
+redactFields({ email: 'a@b.co', nested: { password: 'p' } },
+  { fields: ['password', 'token'] });
+// → { email: 'a@b.co', nested: { password: '[REDACTED]' } }
+```
+
+- Never mutates the input. **Fails closed:** on any internal error (e.g. a
+  hostile throwing getter) it returns the placeholder rather than risk emitting
+  the unredacted original.
 
 ## Stores
 

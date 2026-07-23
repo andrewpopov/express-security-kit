@@ -75,11 +75,18 @@ export {
   ipKey,
   verifiedIdentityKey,
   decodedJwtKey,
+  hmacBodyFieldKey,
 } from './rate-limit/keyGenerator';
 export type {
   KeyGeneratorCore,
   DecodedJwtKeyOptionsCore,
+  HmacBodyFieldKeyOptionsCore,
 } from './rate-limit/keyGenerator';
+
+export { redactUrl } from './redact/redactUrl';
+export type { RedactUrlOptions } from './redact/redactUrl';
+export { redactFields } from './redact/redactFields';
+export type { RedactFieldsOptions } from './redact/redactFields';
 
 export {
   buildCanonicalString,

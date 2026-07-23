@@ -74,7 +74,13 @@
     "verify:dist-fresh": "node scripts/verify-dist-fresh.mjs",
     "audit:runtime": "npm audit --omit=dev --audit-level=high",
     "audit:development": "npm audit --audit-level=high",
-    "verify": "npm run typecheck && npm test && npm run build && npm run verify:pack && npm run audit:runtime && npm run audit:development"
+    "verify": "npm run typecheck && npm test && npm run build && npm run verify:pack && npm run audit:runtime && npm run audit:development",
+    "release:note": "release-kit note",
+    "release:notes": "release-kit notes",
+    "release:bump": "release-kit bump",
+    "release:cut": "release-kit cut",
+    "release:check": "release-kit check",
+    "release:hygiene": "release-kit hygiene"
   },
   "peerDependencies": {
     "cors": ">=2",
@@ -90,6 +96,7 @@
     }
   },
   "devDependencies": {
+    "@andrewpopov/release-kit": "github:andrewpopov/release-kit#v0.2.0",
     "@types/cors": "^2.8.19",
     "@types/express": "^4.17.21",
     "@types/node": "^20.14.0",

@@ -46,10 +46,12 @@ import {
   verifiedIdentityKey as verifiedIdentityKeyCore,
   verifiedIdentityKeyResolved as verifiedIdentityKeyResolvedCore,
   decodedJwtKey as decodedJwtKeyCore,
+  hmacBodyFieldKey as hmacBodyFieldKeyCore,
 } from './core/rate-limit/keyGenerator';
 import type {
   KeyGeneratorCore,
   DecodedJwtKeyOptionsCore,
+  HmacBodyFieldKeyOptionsCore,
   ClientIpResolutionOptions,
 } from './core/rate-limit/keyGenerator';
 /** Express-pinned alias: same shape as the pre-carve `DecodedJwtKeyOptions`. */
@@ -59,6 +61,10 @@ export const verifiedIdentityKey: KeyGeneratorCore<Request> = verifiedIdentityKe
 export const defaultKeyGenerator: KeyGeneratorCore<Request> = defaultKeyGeneratorCore;
 export const decodedJwtKey: (opts?: DecodedJwtKeyOptions) => KeyGeneratorCore<Request> =
   decodedJwtKeyCore;
+/** Express-pinned alias: same shape as `HmacBodyFieldKeyOptionsCore<Request>`. */
+export type HmacBodyFieldKeyOptions = HmacBodyFieldKeyOptionsCore<Request>;
+export const hmacBodyFieldKey: (opts: HmacBodyFieldKeyOptions) => KeyGeneratorCore<Request> =
+  hmacBodyFieldKeyCore;
 export type { ClientIpResolutionOptions };
 export const ipKeyResolved: (
   options?: ClientIpResolutionOptions,
@@ -260,6 +266,14 @@ export type { CorsPolicyConfig, CorsPolicy, CorsRejectHook } from './core/cors/p
 // `@types/cors` fails to type-check `import { corsOptions } from '<pkg>'`
 // with `TS2307: Cannot find module 'cors'`. `resolveCorsPolicy` and
 // `normalizeOrigin` above have no such dependency and are safe on root.
+
+// Log redaction: already framework-agnostic (operate on plain strings/
+// objects, not `Request`), so both are safe direct re-exports — no
+// Request-pinning wrapper needed, same reasoning as `resolveClientIp` above.
+export { redactUrl } from './core/redact/redactUrl';
+export type { RedactUrlOptions } from './core/redact/redactUrl';
+export { redactFields } from './core/redact/redactFields';
+export type { RedactFieldsOptions } from './core/redact/redactFields';
 
 // Note: the Redis store is intentionally NOT exported here. Import it from the
 // '@andrewpopov/express-security-kit/redis-store' subpath so the core entry

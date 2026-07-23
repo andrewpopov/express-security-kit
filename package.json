@@ -1,11 +1,16 @@
 {
   "name": "@andrewpopov/express-security-kit",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "description": "Dependency-light Express security library. Owns the machinery (helmet preset, rate limiter); consuming services inject all policy.",
   "author": "Andrew Popov",
   "license": "MIT",
-  "repository": { "type": "git", "url": "git+https://github.com/andrewpopov/express-security-kit.git" },
-  "bugs": { "url": "https://github.com/andrewpopov/express-security-kit/issues" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/andrewpopov/express-security-kit.git"
+  },
+  "bugs": {
+    "url": "https://github.com/andrewpopov/express-security-kit/issues"
+  },
   "homepage": "https://github.com/andrewpopov/express-security-kit#readme",
   "keywords": [
     "express",

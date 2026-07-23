@@ -77,3 +77,43 @@ export interface DecodedJwtKeyOptionsCore<Req extends SecurityRequest = Security
  * NEVER throws on a malformed/missing/garbage token — it silently falls back.
  */
 export declare function decodedJwtKey<Req extends SecurityRequest = SecurityRequest>(opts?: DecodedJwtKeyOptionsCore<Req>): KeyGeneratorCore<Req>;
+export interface HmacBodyFieldKeyOptionsCore<Req extends SecurityRequest = SecurityRequest> {
+    /** Request-body field to key on, e.g. 'email'. */
+    field: string;
+    /** HMAC-SHA256 secret. */
+    secret: string;
+    /** Prefix for the emitted key. Default 'acct'. */
+    prefix?: string;
+    /**
+     * Normalize the raw field value before hashing. Default identity — pass
+     * one that matches the same canonical form your auth lookup uses (e.g.
+     * lowercase + trim an email), so the rate-limit key lines up with the
+     * account the login attempt is actually against.
+     */
+    canonicalize?: (raw: string) => string;
+    /** Key generator used when the field is missing/non-string. Default ipKey. */
+    fallback?: KeyGeneratorCore<Req>;
+}
+/**
+ * Factory for a Tier-2 PER-ACCOUNT keying strategy for a FAILED-login
+ * limiter: keys on an HMAC-SHA256 of a request-body field (typically the
+ * login identifier, e.g. 'email'), so many distinct IPs credential-stuffing
+ * the SAME account still land in one shared bucket instead of each getting
+ * their own budget. Intended to be paired with `skipSuccessful` so
+ * successful logins don't consume the budget — only failed attempts against
+ * a given account count.
+ *
+ * The field value is run through `canonicalize` (default identity — pass a
+ * canonicalizer matching your auth lookup's normalization, e.g.
+ * lowercase+trim an email) BEFORE hashing, so the key aligns with the same
+ * account across superficial input variants. It is then HMAC'd — never used
+ * raw — so the rate-limit store never holds a plaintext email/identifier,
+ * only an opaque digest keyed on `secret`.
+ *
+ * Reads the body defensively: `SecurityRequest` does not type `body`, so it
+ * is accessed via a narrowed cast rather than `any`. NEVER throws — any
+ * failure (missing/non-string field, hashing error, a throwing fallback) is
+ * caught and degrades to {@link ipKey}, mirroring {@link decodedJwtKey}'s
+ * total-function discipline.
+ */
+export declare function hmacBodyFieldKey<Req extends SecurityRequest = SecurityRequest>(opts: HmacBodyFieldKeyOptionsCore<Req>): KeyGeneratorCore<Req>;

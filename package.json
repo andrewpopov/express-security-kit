@@ -56,6 +56,10 @@
       "types": "./dist/express/webhook/createWebhookVerifier.d.ts",
       "default": "./dist/express/webhook/createWebhookVerifier.js"
     },
+    "./fastify": {
+      "types": "./dist/fastify/index.d.ts",
+      "default": "./dist/fastify/index.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [
@@ -85,10 +89,14 @@
   "peerDependencies": {
     "cors": ">=2",
     "express": ">=4",
+    "fastify": ">=4",
     "helmet": ">=7"
   },
   "peerDependenciesMeta": {
     "cors": {
+      "optional": true
+    },
+    "fastify": {
       "optional": true
     },
     "ioredis": {
@@ -103,6 +111,7 @@
     "cors": "^2.8.6",
     "express": "^4.19.2",
     "fast-check": "^4.8.0",
+    "fastify": "^5.10.0",
     "helmet": "^7.1.0",
     "ioredis": "^5.4.1",
     "typescript": "^5.5.0",

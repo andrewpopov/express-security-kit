@@ -31,12 +31,22 @@ export interface CorsOptionsConfig extends CorsPolicyConfig {
  * adapter: the return type must not force a consumer to install anything
  * beyond the `fastify` peer itself.
  */
-type FastifyCorsAllow = boolean | string | RegExp | Array<string | RegExp>;
+type FastifyCorsAllow = boolean | string | RegExp | FastifyCorsAllow[];
 /**
  * Minimal structural stand-in for `@fastify/cors`'s `FastifyCorsOptions`,
  * covering only the fields this module sets. `@fastify/cors` accepts
  * additional fields this type omits; that's fine, this is a subset used
  * purely to type the value this module returns.
+ *
+ * `origin` MUST mirror the plugin's own `OriginFunction` exactly — a property
+ * (not a method) whose callback takes a REQUIRED second argument. Declaring
+ * the callback's `allow` as optional, or `origin` as a method, makes the
+ * returned object structurally incompatible with `FastifyCorsOptions`, and
+ * `app.register(fastifyCors, corsOptions(...))` then fails to type-check in
+ * every consumer with `No overload matches this call`. That is invisible
+ * in-repo unless something actually registers the plugin, which is why the
+ * integration test in `__tests__/corsOptions.integration.test.ts` — which
+ * does exactly that — is what catches a regression here.
  */
 export interface FastifyCorsOptions {
     credentials?: boolean;
@@ -45,7 +55,7 @@ export interface FastifyCorsOptions {
     exposedHeaders?: string | string[];
     optionsSuccessStatus?: number;
     maxAge?: number;
-    origin(origin: string | undefined, callback: (err: Error | null, allow?: FastifyCorsAllow) => void): void;
+    origin: (origin: string | undefined, callback: (err: Error | null, allow: FastifyCorsAllow) => void) => void;
 }
 /**
  * Build `@fastify/cors` options from the kit's fail-closed origin policy.

@@ -265,9 +265,11 @@ try {
       process.exit(19);
     }
     // './fastify' subpath: same absent-peer consumer as above (only 'express'
-    // + 'helmet' installed, no 'fastify') — createApiKeyAuth/corsOptions only
-    // use 'fastify' as a TYPE, never a runtime import, so this proves the
-    // Fastify adapter loads with the 'fastify' peer absent.
+    // + 'helmet' installed, no 'fastify') — every factory here uses 'fastify'
+    // as a TYPE only, never a runtime import, so this proves the whole Fastify
+    // adapter loads with the 'fastify' peer absent. EVERY export of the
+    // subpath must be listed: a new factory that accidentally value-imports
+    // 'fastify' is only caught if something actually reaches for it here.
     const fastifyAdapter = require('${pkg.name}/fastify');
     if (typeof fastifyAdapter.createApiKeyAuth !== 'function') {
       console.error('CJS: ./fastify subpath missing createApiKeyAuth (with fastify peer absent)');
@@ -276,6 +278,10 @@ try {
     if (typeof fastifyAdapter.corsOptions !== 'function') {
       console.error('CJS: ./fastify subpath missing corsOptions (with fastify peer absent)');
       process.exit(23);
+    }
+    if (typeof fastifyAdapter.createRateLimiter !== 'function') {
+      console.error('CJS: ./fastify subpath missing createRateLimiter (with fastify peer absent)');
+      process.exit(24);
     }
     console.log('CJS OK');
   `;
@@ -324,6 +330,7 @@ try {
     import {
       createApiKeyAuth as fastifyCreateApiKeyAuth,
       corsOptions as fastifyCorsOptions,
+      createRateLimiter as fastifyCreateRateLimiter,
     } from '${pkg.name}/fastify';
     import {
       verifyApiKey as coreVerifyApiKey, extractRawKey, sha256Hasher as coreSha256Hasher,
@@ -456,6 +463,10 @@ try {
     if (typeof fastifyCorsOptions !== 'function') {
       console.error('ESM: ./fastify corsOptions import failed (fastify peer absent)');
       process.exit(23);
+    }
+    if (typeof fastifyCreateRateLimiter !== 'function') {
+      console.error('ESM: ./fastify createRateLimiter import failed (fastify peer absent)');
+      process.exit(24);
     }
     console.log('ESM OK');
   `;

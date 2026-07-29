@@ -307,6 +307,65 @@ function resolveResponseBody<Req extends SecurityRequest>(
 }
 
 /**
+ * The response surface the refund hook needs. Both an Express `Response` and
+ * a Fastify `reply.raw` are a Node `http.ServerResponse`, which satisfies
+ * this structurally — so the finish-vs-close distinction is written once.
+ */
+export interface RefundableResponse {
+  statusCode: number;
+  on(event: 'finish' | 'close', listener: () => void): unknown;
+  removeListener(event: 'finish' | 'close', listener: () => void): unknown;
+}
+
+/**
+ * For an ALLOWED request under `skipSuccessful`, hook the response and, when it
+ * FINISHES with a status < 400, refund the counted hit via `onSettled` (which
+ * applies the store.decrement policy).
+ *
+ * Refunds ONLY on `finish` (the response was fully sent and the status is
+ * final). `close` is used for listener CLEANUP ONLY — never a refund: a client
+ * that aborts mid-request emits `close` while `res.statusCode` is still the
+ * default 200, so refunding there would credit a request that never completed
+ * (e.g. a failed login the route hadn't yet marked 401).
+ *
+ * `refundFlag` is unique PER LIMITER (not per response), so when several tiers
+ * each counted the same successful request, each refunds its own hit; the flag
+ * only prevents this one limiter's finish/close pair from acting twice.
+ * Never throws.
+ */
+export function scheduleRefundOnFinish(
+  res: RefundableResponse,
+  onSettled: (statusCode: number) => void,
+  refundFlag: symbol,
+  onHookError: (err: unknown) => void,
+): void {
+  const bag = res as unknown as Record<symbol, boolean>;
+  const cleanup = (): void => {
+    res.removeListener('finish', onFinish);
+    res.removeListener('close', onClose);
+  };
+  const onFinish = (): void => {
+    if (bag[refundFlag]) return;
+    bag[refundFlag] = true;
+    cleanup();
+    onSettled(res.statusCode);
+  };
+  const onClose = (): void => {
+    // Socket closed before `finish` — the response is incomplete/aborted, so do
+    // NOT refund; just settle this limiter and drop the listeners.
+    if (bag[refundFlag]) return;
+    bag[refundFlag] = true;
+    cleanup();
+  };
+  try {
+    res.on('finish', onFinish);
+    res.on('close', onClose);
+  } catch (err) {
+    onHookError(err);
+  }
+}
+
+/**
  * Build the framework-agnostic rate-limit decision engine. `evaluate` mirrors
  * the pre-carve Express middleware's control flow exactly (see the ordering
  * notes on each branch below) but performs NO framework I/O — no headers are

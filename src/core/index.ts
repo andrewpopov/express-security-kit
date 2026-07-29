@@ -83,7 +83,7 @@ export type {
   HmacBodyFieldKeyOptionsCore,
 } from './rate-limit/keyGenerator';
 
-export { createRateLimitCore } from './rate-limit/limiter';
+export { createRateLimitCore, scheduleRefundOnFinish } from './rate-limit/limiter';
 export type {
   RateLimitCore,
   RateLimitOutcome,
@@ -94,6 +94,7 @@ export type {
   RateLimitAlgorithm,
   RateLimiterLogger,
   RateLimitOverride,
+  RefundableResponse,
 } from './rate-limit/limiter';
 
 export { redactUrl } from './redact/redactUrl';

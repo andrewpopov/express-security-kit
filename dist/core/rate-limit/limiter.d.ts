@@ -120,6 +120,16 @@ export type RateLimitOutcome<Req extends SecurityRequest = SecurityRequest> = {
     headers: RateLimitHeader[];
     status: 429;
     body: unknown;
+    /**
+     * The body, already `JSON.stringify`d exactly once by the core (which
+     * also validated it as part of resolving the body). Adapters that send
+     * JSON text directly (e.g. Fastify) MUST send this instead of
+     * re-stringifying `body` themselves — re-serializing risks producing
+     * different bytes (or throwing) if the value is stateful (a getter or a
+     * `toJSON` with side effects). Express's `res.json(body)` does its own
+     * serialization by design and is exempt from this.
+     */
+    serializedBody: string;
     retryAfterSeconds: number;
 };
 export interface RateLimitCore<Req extends SecurityRequest = SecurityRequest> {

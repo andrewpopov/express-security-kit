@@ -105,22 +105,24 @@ export function createRateLimiter(
         for (const [name, value] of outcome.headers) {
           reply.header(name, value);
         }
-        // `JSON.stringify` is safe here without a guard: the core has
-        // already proven the body serializable (`resolveResponseBody` runs
-        // `JSON.stringify` as a validity check and falls back to the default
-        // envelope on failure), and the body is never nullish (a nullish
-        // custom body is replaced by the default) — so do not "helpfully"
-        // wrap this in a try/catch. Setting the content type explicitly and
-        // sending the pre-stringified bytes matches Express's `res.json`
-        // byte-for-byte for every JSON-serializable value, not just objects:
-        // `reply.send(outcome.body)` alone would send a string/number/array
-        // body as `text/plain`, diverging from Express. Fastify does not
-        // re-serialize a string payload once the content type is already
-        // `application/json`, so this sends exactly the stringified bytes.
+        // Send `outcome.serializedBody` — the core's ONE validated
+        // serialization of the body — rather than re-stringifying
+        // `outcome.body` here. Re-serializing would run `JSON.stringify` a
+        // second time against the same value; for a stateful `toJSON()` or
+        // getter that can produce different bytes than what was validated,
+        // or throw on the second call where it succeeded on the first (a 500
+        // from a value the core already proved sendable). Setting the
+        // content type explicitly and sending the pre-stringified bytes
+        // matches Express's `res.json` byte-for-byte for every
+        // JSON-serializable value, not just objects: `reply.send(outcome.body)`
+        // alone would send a string/number/array body as `text/plain`,
+        // diverging from Express. Fastify does not re-serialize a string
+        // payload once the content type is already `application/json`, so
+        // this sends exactly the validated bytes.
         await reply
           .type('application/json; charset=utf-8')
           .code(outcome.status)
-          .send(JSON.stringify(outcome.body));
+          .send(outcome.serializedBody);
         return;
       }
 

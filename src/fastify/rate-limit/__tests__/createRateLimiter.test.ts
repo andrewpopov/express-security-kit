@@ -327,6 +327,111 @@ describe('createRateLimiter (Fastify, integration)', () => {
     expect(res.statusCode).toBe(200);
   });
 
+  it('a throwing onLimit AND a throwing logger still yields 429, route handler not reached', async () => {
+    const store = makeStore();
+    let handlerReached = false;
+    const throwingLogger = {
+      warn: () => {
+        throw new Error('logger boom');
+      },
+    };
+    const app = await buildApp(
+      {
+        windowMs: 5000,
+        max: 1,
+        store,
+        now: () => 10_000,
+        logger: throwingLogger,
+        onLimit: () => {
+          throw new Error('onLimit boom');
+        },
+      },
+      () => {
+        handlerReached = true;
+      },
+    );
+
+    await app.inject({ method: 'GET', url: '/thing' }); // trips the limit
+    handlerReached = false; // reset after the allowed first request
+    const res = await app.inject({ method: 'GET', url: '/thing' }); // over limit
+
+    expect(res.statusCode).toBe(429);
+    expect(handlerReached).toBe(false);
+  });
+
+  it('a function buildResponseBody falls back to the default envelope, not an empty body', async () => {
+    const store = makeStore();
+    const app = await buildApp({
+      windowMs: 5000,
+      max: 1,
+      store,
+      now: () => 10_000,
+      buildResponseBody: () => () => {},
+    });
+
+    await app.inject({ method: 'GET', url: '/thing' });
+    const res = await app.inject({ method: 'GET', url: '/thing' });
+
+    expect(res.statusCode).toBe(429);
+    expect(res.json()).toEqual({
+      error: {
+        code: 'RATE_LIMITED',
+        message: expect.any(String),
+        retryAfter: expect.any(Number),
+      },
+    });
+  });
+
+  it('a toJSON() returning undefined falls back to the default envelope, not an empty body', async () => {
+    const store = makeStore();
+    const app = await buildApp({
+      windowMs: 5000,
+      max: 1,
+      store,
+      now: () => 10_000,
+      buildResponseBody: () => ({ toJSON: () => undefined }),
+    });
+
+    await app.inject({ method: 'GET', url: '/thing' });
+    const res = await app.inject({ method: 'GET', url: '/thing' });
+
+    expect(res.statusCode).toBe(429);
+    expect(res.json()).toEqual({
+      error: {
+        code: 'RATE_LIMITED',
+        message: expect.any(String),
+        retryAfter: expect.any(Number),
+      },
+    });
+  });
+
+  it('a toJSON() that succeeds once then throws still produces a correct 429 (serialized exactly once)', async () => {
+    const store = makeStore();
+    let toJSONCalls = 0;
+    const app = await buildApp({
+      windowMs: 5000,
+      max: 1,
+      store,
+      now: () => 10_000,
+      buildResponseBody: () => ({
+        toJSON: () => {
+          toJSONCalls += 1;
+          if (toJSONCalls > 1) {
+            throw new Error('second serialization boom');
+          }
+          return { custom: true };
+        },
+      }),
+    });
+
+    await app.inject({ method: 'GET', url: '/thing' });
+    const res = await app.inject({ method: 'GET', url: '/thing' });
+
+    expect(res.statusCode).toBe(429);
+    expect(res.json()).toEqual({ custom: true });
+    expect(toJSONCalls).toBe(1);
+  });
+
   it('honors the per-request override via request.securityContext.rateLimitOverride', async () => {
     const store = makeStore();
     const app = fastify();

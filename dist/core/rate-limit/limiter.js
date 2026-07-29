@@ -97,7 +97,11 @@ function safeWarn(config, message, err) {
  * Resolve the 429 JSON body per precedence: `buildResponseBody` (fully custom)
  * > `message` (default envelope, custom message) > default. A throwing
  * `buildResponseBody` falls back to the default body (logged) so a formatter
- * can never crash the middleware.
+ * can never crash the middleware. Serializes the chosen body exactly ONCE —
+ * the returned `serializedBody` is what adapters that write JSON text
+ * directly must send, so a body is never re-stringified (and thus never
+ * re-evaluated, which matters for a stateful `toJSON` or getter) after this
+ * function has validated it.
  */
 function resolveResponseBody(req, decision, key, retryAfterSeconds, config) {
     if (config.buildResponseBody) {
@@ -122,15 +126,25 @@ function resolveResponseBody(req, decision, key, retryAfterSeconds, config) {
                 if (typeof custom.then === 'function') {
                     throw new Error('buildResponseBody must be synchronous (returned a thenable)');
                 }
-                JSON.stringify(custom);
-                return custom;
+                const serializedBody = JSON.stringify(custom);
+                // `JSON.stringify` returns `undefined` WITHOUT throwing for a
+                // top-level function, a symbol, or an object whose `toJSON()`
+                // returns `undefined` — that must be treated the same as a throw,
+                // not as success, or the adapter ends up sending an empty body.
+                if (serializedBody === undefined) {
+                    throw new Error('buildResponseBody must return a JSON-serializable value');
+                }
+                return { body: custom, serializedBody };
             }
         }
         catch (err) {
             safeWarn(config, '[express-security-kit] buildResponseBody produced an invalid body; using default', err);
         }
     }
-    return defaultBody(retryAfterSeconds, config.message);
+    const body = defaultBody(retryAfterSeconds, config.message);
+    // `defaultBody` always returns a plain, JSON-serializable object literal,
+    // so `JSON.stringify` here can never return `undefined`.
+    return { body, serializedBody: JSON.stringify(body) };
 }
 /**
  * For an ALLOWED request under `skipSuccessful`, hook the response and, when it
@@ -231,19 +245,18 @@ function createRateLimitCore(config) {
                 // adapter writes headers) — both are synchronous and onLimit never
                 // touches the response, so this is unobservable.
                 if (config.onLimit) {
-                    const logger = config.logger ?? consoleLogger;
                     try {
                         const maybePromise = config.onLimit(req, key);
                         if (maybePromise &&
                             typeof maybePromise.then === 'function') {
-                            maybePromise.catch((err) => logger.warn('[express-security-kit] onLimit hook rejected', err));
+                            maybePromise.catch((err) => safeWarn(config, '[express-security-kit] onLimit hook rejected', err));
                         }
                     }
                     catch (err) {
-                        logger.warn('[express-security-kit] onLimit hook threw', err);
+                        safeWarn(config, '[express-security-kit] onLimit hook threw', err);
                     }
                 }
-                const body = resolveResponseBody(req, decision, key, retryAfterSeconds, config);
+                const { body, serializedBody } = resolveResponseBody(req, decision, key, retryAfterSeconds, config);
                 return {
                     type: 'reject',
                     key,
@@ -252,6 +265,7 @@ function createRateLimitCore(config) {
                     headers,
                     status: 429,
                     body,
+                    serializedBody,
                     retryAfterSeconds,
                 };
             }

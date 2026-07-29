@@ -134,6 +134,135 @@ describe('fail-open', () => {
   });
 });
 
+describe('onLimit fail-closed invariant (a decided rejection must never become an allow)', () => {
+  it('a throwing onLimit AND a throwing logger still yields reject, not skip', async () => {
+    const store = makeStore();
+    const throwingLogger = {
+      warn: () => {
+        throw new Error('logger boom');
+      },
+    };
+    const core = createRateLimitCore({
+      windowMs: 1000,
+      max: 0,
+      store,
+      now: () => 10_000,
+      logger: throwingLogger,
+      onLimit: () => {
+        throw new Error('onLimit boom');
+      },
+    });
+
+    const outcome = await core.evaluate(req());
+
+    expect(outcome.type).toBe('reject');
+  });
+
+  it('a rejected onLimit promise AND a throwing logger produces no unhandled rejection', async () => {
+    const store = makeStore();
+    const throwingLogger = {
+      warn: () => {
+        throw new Error('logger boom');
+      },
+    };
+    const core = createRateLimitCore({
+      windowMs: 1000,
+      max: 0,
+      store,
+      now: () => 10_000,
+      logger: throwingLogger,
+      onLimit: () => Promise.reject(new Error('async onLimit boom')),
+    });
+
+    const unhandled = vi.fn();
+    process.on('unhandledRejection', unhandled);
+    try {
+      const outcome = await core.evaluate(req());
+      expect(outcome.type).toBe('reject');
+      // Let the onLimit rejection's .catch() microtask settle.
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(unhandled).not.toHaveBeenCalled();
+    } finally {
+      process.removeListener('unhandledRejection', unhandled);
+    }
+  });
+});
+
+describe('resolveResponseBody: JSON.stringify returning undefined is INVALID, not success', () => {
+  it('a function body falls back to the default envelope', async () => {
+    const store = makeStore();
+    const core = createRateLimitCore({
+      windowMs: 1000,
+      max: 0,
+      store,
+      now: () => 10_000,
+      buildResponseBody: () => () => {},
+    });
+
+    const outcome = await core.evaluate(req());
+
+    expect(outcome.type).toBe('reject');
+    if (outcome.type !== 'reject') throw new Error('expected reject');
+    expect(outcome.body).toEqual({
+      error: {
+        code: 'RATE_LIMITED',
+        message: expect.any(String),
+        retryAfter: expect.any(Number),
+      },
+    });
+  });
+
+  it('an object whose toJSON() returns undefined falls back to the default envelope', async () => {
+    const store = makeStore();
+    const core = createRateLimitCore({
+      windowMs: 1000,
+      max: 0,
+      store,
+      now: () => 10_000,
+      buildResponseBody: () => ({ toJSON: () => undefined }),
+    });
+
+    const outcome = await core.evaluate(req());
+
+    expect(outcome.type).toBe('reject');
+    if (outcome.type !== 'reject') throw new Error('expected reject');
+    expect(outcome.body).toEqual({
+      error: {
+        code: 'RATE_LIMITED',
+        message: expect.any(String),
+        retryAfter: expect.any(Number),
+      },
+    });
+  });
+
+  it('the reject outcome carries a serializedBody matching the resolved body, computed once', async () => {
+    const store = makeStore();
+    let toJSONCalls = 0;
+    const core = createRateLimitCore({
+      windowMs: 1000,
+      max: 0,
+      store,
+      now: () => 10_000,
+      buildResponseBody: () => ({
+        toJSON: () => {
+          toJSONCalls += 1;
+          if (toJSONCalls > 1) {
+            throw new Error('second serialization boom');
+          }
+          return { custom: true };
+        },
+      }),
+    });
+
+    const outcome = await core.evaluate(req());
+
+    expect(outcome.type).toBe('reject');
+    if (outcome.type !== 'reject') throw new Error('expected reject');
+    expect(outcome.serializedBody).toBe('{"custom":true}');
+    expect(toJSONCalls).toBe(1);
+  });
+});
+
 describe('onSettled', () => {
   it('is absent without skipSuccessful', async () => {
     const store = makeStore();

@@ -153,6 +153,16 @@ export type RateLimitOutcome<Req extends SecurityRequest = SecurityRequest> =
       headers: RateLimitHeader[];
       status: 429;
       body: unknown;
+      /**
+       * The body, already `JSON.stringify`d exactly once by the core (which
+       * also validated it as part of resolving the body). Adapters that send
+       * JSON text directly (e.g. Fastify) MUST send this instead of
+       * re-stringifying `body` themselves — re-serializing risks producing
+       * different bytes (or throwing) if the value is stateful (a getter or a
+       * `toJSON` with side effects). Express's `res.json(body)` does its own
+       * serialization by design and is exempt from this.
+       */
+      serializedBody: string;
       retryAfterSeconds: number;
     };
 
@@ -257,11 +267,21 @@ export function safeWarn<Req extends SecurityRequest = SecurityRequest>(
   }
 }
 
+/** The 429 body plus its serialization, computed exactly once. */
+interface ResolvedResponseBody {
+  body: unknown;
+  serializedBody: string;
+}
+
 /**
  * Resolve the 429 JSON body per precedence: `buildResponseBody` (fully custom)
  * > `message` (default envelope, custom message) > default. A throwing
  * `buildResponseBody` falls back to the default body (logged) so a formatter
- * can never crash the middleware.
+ * can never crash the middleware. Serializes the chosen body exactly ONCE —
+ * the returned `serializedBody` is what adapters that write JSON text
+ * directly must send, so a body is never re-stringified (and thus never
+ * re-evaluated, which matters for a stateful `toJSON` or getter) after this
+ * function has validated it.
  */
 function resolveResponseBody<Req extends SecurityRequest>(
   req: Req,
@@ -269,7 +289,7 @@ function resolveResponseBody<Req extends SecurityRequest>(
   key: string,
   retryAfterSeconds: number,
   config: RateLimiterConfigCore<Req>,
-): unknown {
+): ResolvedResponseBody {
   if (config.buildResponseBody) {
     try {
       const custom = config.buildResponseBody({
@@ -292,8 +312,17 @@ function resolveResponseBody<Req extends SecurityRequest>(
         if (typeof (custom as { then?: unknown }).then === 'function') {
           throw new Error('buildResponseBody must be synchronous (returned a thenable)');
         }
-        JSON.stringify(custom);
-        return custom;
+        const serializedBody = JSON.stringify(custom);
+        // `JSON.stringify` returns `undefined` WITHOUT throwing for a
+        // top-level function, a symbol, or an object whose `toJSON()`
+        // returns `undefined` — that must be treated the same as a throw,
+        // not as success, or the adapter ends up sending an empty body.
+        if (serializedBody === undefined) {
+          throw new Error(
+            'buildResponseBody must return a JSON-serializable value',
+          );
+        }
+        return { body: custom, serializedBody };
       }
     } catch (err) {
       safeWarn(
@@ -303,7 +332,10 @@ function resolveResponseBody<Req extends SecurityRequest>(
       );
     }
   }
-  return defaultBody(retryAfterSeconds, config.message);
+  const body = defaultBody(retryAfterSeconds, config.message);
+  // `defaultBody` always returns a plain, JSON-serializable object literal,
+  // so `JSON.stringify` here can never return `undefined`.
+  return { body, serializedBody: JSON.stringify(body)! };
 }
 
 /**
@@ -435,7 +467,6 @@ export function createRateLimitCore<Req extends SecurityRequest = SecurityReques
         // adapter writes headers) — both are synchronous and onLimit never
         // touches the response, so this is unobservable.
         if (config.onLimit) {
-          const logger = config.logger ?? consoleLogger;
           try {
             const maybePromise = config.onLimit(req, key) as unknown;
             if (
@@ -443,15 +474,21 @@ export function createRateLimitCore<Req extends SecurityRequest = SecurityReques
               typeof (maybePromise as Promise<unknown>).then === 'function'
             ) {
               (maybePromise as Promise<unknown>).catch((err) =>
-                logger.warn('[express-security-kit] onLimit hook rejected', err),
+                safeWarn(config, '[express-security-kit] onLimit hook rejected', err),
               );
             }
           } catch (err) {
-            logger.warn('[express-security-kit] onLimit hook threw', err);
+            safeWarn(config, '[express-security-kit] onLimit hook threw', err);
           }
         }
 
-        const body = resolveResponseBody(req, decision, key, retryAfterSeconds, config);
+        const { body, serializedBody } = resolveResponseBody(
+          req,
+          decision,
+          key,
+          retryAfterSeconds,
+          config,
+        );
 
         return {
           type: 'reject',
@@ -461,6 +498,7 @@ export function createRateLimitCore<Req extends SecurityRequest = SecurityReques
           headers,
           status: 429,
           body,
+          serializedBody,
           retryAfterSeconds,
         };
       }

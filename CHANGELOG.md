@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.9.0
+
+- A Fastify adapter (`./fastify`) — api-key auth and CORS over the existing agnostic core
+  `@andrewpopov/express-security-kit/fastify` exposes `createApiKeyAuth` as a Fastify `preHandler` and `corsOptions()` for `@fastify/cors`, both sitting on the same framework-agnostic core the Express adapter uses — so the two frameworks share one verification path and one fail-closed origin policy rather than two implementations that can drift. The api-key semantics are ported exactly: fail-closed, the specific failure reason never leaks to the client, `'error'`/`'unavailable'` respond with `errorStatus` (default 503, not 401), and `optional` passes through only a genuinely absent credential. `fastify` is an **optional** peer dependency and every import of it is types-only, so the subpath loads and works in a consumer that has no `fastify` installed — existing Express consumers are unaffected and need install nothing. The adapter also exposes `createRateLimiter` as a `preHandler` over the same core decision algorithm the Express limiter uses, so the fixed/sliding window logic exists once rather than per framework. Helmet is not wrapped, because `@fastify/helmet` already does that.
+- `createRateLimitCore()` — the rate-limit decision algorithm, carved into the framework-agnostic core
+  The v1.1.0 core carve moved the rate-limit STORE into `src/core/rate-limit/` but left the DECISION algorithm behind in the Express middleware. It now lives in core as `createRateLimitCore()`, exported from `@andrewpopov/express-security-kit/core`: `evaluate(req)` returns a `skip` / `allow` / `reject` outcome carrying the decision, the header list, and the 429 body, and the adapter does nothing but write them. The fixed and sliding window algorithms — including the weighted previous-window estimate — therefore exist exactly once, rather than once per framework, which is what lets the Fastify limiter be a thin adapter instead of a second copy of security-critical arithmetic. **No behaviour change for Express consumers**: the middleware's public surface (`createRateLimiter`, `RateLimiterConfig`, `RateLimitRejection`, `KeyGenerator`, ...) and every one of its semantics — fail-open on store errors, the `onLimit` hook that can never turn a 429 into an allow, `skipSuccessful` refunding only on a genuinely finished response — are unchanged and still covered by the same tests.
+- Manage releases with release-kit (fragment-based CHANGELOG + version bump)
+  Releases are now driven by release-kit: describe each change as a fragment under `.changes/unreleased/` and run `npm run release:cut` to compile them into a new CHANGELOG section, bump the version, and archive the fragments.
+
 ## 1.8.0
 
 - **Log redaction (new `Module 6`).** Two pure, framework-agnostic helpers for

@@ -83,6 +83,19 @@ export type {
   HmacBodyFieldKeyOptionsCore,
 } from './rate-limit/keyGenerator';
 
+export { createRateLimitCore } from './rate-limit/limiter';
+export type {
+  RateLimitCore,
+  RateLimitOutcome,
+  RateLimitDecision,
+  RateLimitHeader,
+  RateLimiterConfigCore,
+  RateLimitRejectionCore,
+  RateLimitAlgorithm,
+  RateLimiterLogger,
+  RateLimitOverride,
+} from './rate-limit/limiter';
+
 export { redactUrl } from './redact/redactUrl';
 export type { RedactUrlOptions } from './redact/redactUrl';
 export { redactFields } from './redact/redactFields';

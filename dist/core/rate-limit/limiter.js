@@ -1,0 +1,302 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.safeWarn = safeWarn;
+exports.scheduleRefundOnFinish = scheduleRefundOnFinish;
+exports.createRateLimitCore = createRateLimitCore;
+const store_1 = require("./store");
+const keyGenerator_1 = require("./keyGenerator");
+const consoleLogger = {
+    warn: (message, meta) => console.warn(message, meta ?? ''),
+};
+/**
+ * A shared default store so multiple limiters created without an explicit
+ * `store` don't each spin up their own bucket map + timer. Tiers that must not
+ * share state should pass their own store.
+ */
+let sharedMemoryStore;
+function getSharedStore() {
+    if (!sharedMemoryStore) {
+        sharedMemoryStore = new store_1.MemoryRateLimitStore();
+    }
+    return sharedMemoryStore;
+}
+function resolveMax(config, req, override) {
+    if (override) {
+        return { windowMs: override.windowMs, max: override.max };
+    }
+    const max = typeof config.max === 'function' ? config.max(req) : config.max;
+    return { windowMs: config.windowMs, max };
+}
+/**
+ * Apply the algorithm to a store hit to produce a decision.
+ *
+ * fixed:   reject when current > max (current already includes this hit).
+ * sliding: weighted = previous * (1 - elapsedInCurrent/windowMs) + current;
+ *          reject when weighted >= max.
+ */
+function decide(algorithm, hit, windowMs, max, now) {
+    if (algorithm === 'sliding') {
+        const windowStart = hit.resetAt - windowMs;
+        const elapsedInCurrent = Math.min(windowMs, Math.max(0, now - windowStart));
+        const weightPrevious = Math.max(0, 1 - elapsedInCurrent / windowMs);
+        const weighted = hit.previous * weightPrevious + hit.current;
+        // `max` means the same thing across algorithms: allow up to and including
+        // `max`, reject only when the weighted estimate EXCEEDS it. In an empty
+        // window this lets exactly `max` through, matching the fixed window.
+        const allowed = weighted <= max;
+        const remaining = Math.max(0, Math.floor(max - weighted));
+        return {
+            allowed,
+            limit: max,
+            remaining,
+            resetAt: hit.resetAt,
+            used: weighted,
+        };
+    }
+    // fixed
+    const allowed = hit.current <= max;
+    const remaining = Math.max(0, max - hit.current);
+    return {
+        allowed,
+        limit: max,
+        remaining,
+        resetAt: hit.resetAt,
+        used: hit.current,
+    };
+}
+/** The RateLimit-* header VALUES for a decision; order matches emission order. */
+function computeHeaderValues(decision, now) {
+    const resetSeconds = Math.max(0, Math.ceil((decision.resetAt - now) / 1000));
+    return [
+        ['RateLimit-Limit', String(decision.limit)],
+        ['RateLimit-Remaining', String(decision.remaining)],
+        ['RateLimit-Reset', String(resetSeconds)],
+    ];
+}
+const DEFAULT_RATE_LIMIT_MESSAGE = 'Too many requests. Please retry later.';
+/** Build the default 429 envelope, optionally with a custom message. */
+function defaultBody(retryAfterSeconds, message) {
+    return {
+        error: {
+            code: 'RATE_LIMITED',
+            message: message ?? DEFAULT_RATE_LIMIT_MESSAGE,
+            retryAfter: retryAfterSeconds,
+        },
+    };
+}
+/** Log a warning without ever letting a throwing logger break the response. */
+function safeWarn(config, message, err) {
+    try {
+        (config.logger ?? consoleLogger).warn(message, err);
+    }
+    catch {
+        // A logger that throws must not prevent the default body from being sent.
+    }
+}
+/**
+ * Resolve the 429 JSON body per precedence: `buildResponseBody` (fully custom)
+ * > `message` (default envelope, custom message) > default. A throwing
+ * `buildResponseBody` falls back to the default body (logged) so a formatter
+ * can never crash the middleware. Serializes the chosen body exactly ONCE —
+ * the returned `serializedBody` is what adapters that write JSON text
+ * directly must send, so a body is never re-stringified (and thus never
+ * re-evaluated, which matters for a stateful `toJSON` or getter) after this
+ * function has validated it.
+ */
+function resolveResponseBody(req, decision, key, retryAfterSeconds, config) {
+    if (config.buildResponseBody) {
+        try {
+            const custom = config.buildResponseBody({
+                limit: decision.limit,
+                remaining: decision.remaining,
+                resetAt: decision.resetAt,
+                retryAfterSeconds,
+                key,
+                req,
+            });
+            // A nullish return is treated as "no custom body" rather than sending an
+            // empty 429 — guards against a formatter that forgets to return.
+            if (custom !== undefined && custom !== null) {
+                // The body is resolved synchronously and handed straight to the
+                // adapter's response write, so a custom body must never be able to
+                // break the 429. Reject a thenable (an async formatter would
+                // serialize as `{}` and could leak a rejected promise) and anything
+                // not JSON-serializable (a circular object or BigInt would make the
+                // adapter's JSON write throw into its own error path).
+                if (typeof custom.then === 'function') {
+                    throw new Error('buildResponseBody must be synchronous (returned a thenable)');
+                }
+                const serializedBody = JSON.stringify(custom);
+                // `JSON.stringify` returns `undefined` WITHOUT throwing for a
+                // top-level function, a symbol, or an object whose `toJSON()`
+                // returns `undefined` — that must be treated the same as a throw,
+                // not as success, or the adapter ends up sending an empty body.
+                if (serializedBody === undefined) {
+                    throw new Error('buildResponseBody must return a JSON-serializable value');
+                }
+                return { body: custom, serializedBody };
+            }
+        }
+        catch (err) {
+            safeWarn(config, '[express-security-kit] buildResponseBody produced an invalid body; using default', err);
+        }
+    }
+    const body = defaultBody(retryAfterSeconds, config.message);
+    // `defaultBody` always returns a plain, JSON-serializable object literal,
+    // so `JSON.stringify` here can never return `undefined`.
+    return { body, serializedBody: JSON.stringify(body) };
+}
+/**
+ * For an ALLOWED request under `skipSuccessful`, hook the response and, when it
+ * FINISHES with a status < 400, refund the counted hit via `onSettled` (which
+ * applies the store.decrement policy).
+ *
+ * Refunds ONLY on `finish` (the response was fully sent and the status is
+ * final). `close` is used for listener CLEANUP ONLY — never a refund: a client
+ * that aborts mid-request emits `close` while `res.statusCode` is still the
+ * default 200, so refunding there would credit a request that never completed
+ * (e.g. a failed login the route hadn't yet marked 401).
+ *
+ * `refundFlag` is unique PER LIMITER (not per response), so when several tiers
+ * each counted the same successful request, each refunds its own hit; the flag
+ * only prevents this one limiter's finish/close pair from acting twice.
+ * Never throws.
+ */
+function scheduleRefundOnFinish(res, onSettled, refundFlag, onHookError) {
+    const bag = res;
+    const cleanup = () => {
+        res.removeListener('finish', onFinish);
+        res.removeListener('close', onClose);
+    };
+    const onFinish = () => {
+        if (bag[refundFlag])
+            return;
+        bag[refundFlag] = true;
+        cleanup();
+        onSettled(res.statusCode);
+    };
+    const onClose = () => {
+        // Socket closed before `finish` — the response is incomplete/aborted, so do
+        // NOT refund; just settle this limiter and drop the listeners.
+        if (bag[refundFlag])
+            return;
+        bag[refundFlag] = true;
+        cleanup();
+    };
+    try {
+        res.on('finish', onFinish);
+        res.on('close', onClose);
+    }
+    catch (err) {
+        onHookError(err);
+    }
+}
+/**
+ * Build the framework-agnostic rate-limit decision engine. `evaluate` mirrors
+ * the pre-carve Express middleware's control flow exactly (see the ordering
+ * notes on each branch below) but performs NO framework I/O — no headers are
+ * written, no response is sent, no `next()` is called. The adapter (Express,
+ * Fastify, ...) is responsible for translating a `RateLimitOutcome` into the
+ * actual response.
+ */
+function createRateLimitCore(config) {
+    const algorithm = config.algorithm ?? 'fixed';
+    // `ipResolution` only takes effect when no explicit `keyGenerator` is
+    // given — an explicit generator is always authoritative. With neither set,
+    // this is `defaultKeyGenerator` untouched, preserving pre-1.4.0 keys.
+    const keyGenerator = config.keyGenerator ??
+        (config.ipResolution
+            ? (0, keyGenerator_1.verifiedIdentityKeyResolved)(config.ipResolution)
+            : keyGenerator_1.defaultKeyGenerator);
+    const store = config.store ?? getSharedStore();
+    const emitHeaders = config.headers ?? true;
+    const clock = config.now ?? Date.now;
+    const overrideResolver = config.overrideResolver ??
+        ((req) => req.securityContext?.rateLimitOverride);
+    async function evaluate(req) {
+        try {
+            if (config.skip?.(req)) {
+                return { type: 'skip', reason: 'skipped' };
+            }
+            const now = clock();
+            const override = overrideResolver(req);
+            const { windowMs, max } = resolveMax(config, req, override);
+            const key = keyGenerator(req);
+            let hit;
+            try {
+                hit = await store.hit(key, windowMs, now);
+            }
+            catch (err) {
+                // Fail OPEN: never let a store outage take down the service. safeWarn so
+                // a throwing custom logger can't turn a store blip into a 500.
+                safeWarn(config, '[express-security-kit] rate-limit store error; failing open', err);
+                return { type: 'skip', reason: 'store-error' };
+            }
+            const decision = decide(algorithm, hit, windowMs, max, now);
+            if (!decision.allowed) {
+                const retryAfterSeconds = Math.max(0, Math.ceil((decision.resetAt - now) / 1000));
+                const headers = emitHeaders
+                    ? [...computeHeaderValues(decision, now), ['Retry-After', String(retryAfterSeconds)]]
+                    : [];
+                // A misbehaving onLimit hook must NEVER convert a 429 into an allow.
+                // Catch a synchronous throw, and attach a rejection handler to a
+                // returned promise so an async hook can't produce an unhandled
+                // rejection. Fires before the outcome is returned (i.e. before the
+                // adapter writes headers) — both are synchronous and onLimit never
+                // touches the response, so this is unobservable.
+                if (config.onLimit) {
+                    try {
+                        const maybePromise = config.onLimit(req, key);
+                        if (maybePromise &&
+                            typeof maybePromise.then === 'function') {
+                            maybePromise.catch((err) => safeWarn(config, '[express-security-kit] onLimit hook rejected', err));
+                        }
+                    }
+                    catch (err) {
+                        safeWarn(config, '[express-security-kit] onLimit hook threw', err);
+                    }
+                }
+                const { body, serializedBody } = resolveResponseBody(req, decision, key, retryAfterSeconds, config);
+                return {
+                    type: 'reject',
+                    key,
+                    windowMs,
+                    decision,
+                    headers,
+                    status: 429,
+                    body,
+                    serializedBody,
+                    retryAfterSeconds,
+                };
+            }
+            const headers = emitHeaders
+                ? computeHeaderValues(decision, now)
+                : [];
+            if (config.skipSuccessful) {
+                // The refund POLICY only — the adapter decides WHEN this is safe to
+                // call (i.e. once, on a genuinely finished response). Errors from the
+                // store are swallowed via safeWarn; a refund must never surface as a
+                // thrown error to the caller.
+                const onSettled = (statusCode) => {
+                    try {
+                        if (statusCode < 400) {
+                            void Promise.resolve(store.decrement(key, windowMs, now)).catch((err) => safeWarn(config, '[express-security-kit] rate-limit refund failed', err));
+                        }
+                    }
+                    catch (err) {
+                        safeWarn(config, '[express-security-kit] rate-limit refund failed', err);
+                    }
+                };
+                return { type: 'allow', key, windowMs, decision, headers, onSettled };
+            }
+            return { type: 'allow', key, windowMs, decision, headers };
+        }
+        catch (err) {
+            // Any unexpected error also fails open (safeWarn so a throwing logger
+            // can't prevent the caller from proceeding).
+            safeWarn(config, '[express-security-kit] rate-limit unexpected error; failing open', err);
+            return { type: 'skip', reason: 'unexpected-error' };
+        }
+    }
+    return { evaluate, store };
+}

@@ -4,7 +4,7 @@
 // ESM consumers of the CommonJS build. NO file reachable from here may import
 // 'express' or 'fastify' (enforced by scripts/check-core-agnostic.mjs).
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.MemoryNonceStore = exports.sha256Hex = exports.signRequest = exports.buildCanonicalString = exports.redactFields = exports.redactUrl = exports.hmacBodyFieldKey = exports.decodedJwtKey = exports.verifiedIdentityKey = exports.ipKey = exports.defaultKeyGenerator = exports.MemoryRateLimitStore = exports.auditDeniedHook = exports.auditRateLimitHook = exports.auditFailureHook = exports.ConsoleAuditSink = exports.buildAuditEvent = exports.AuditBuffer = exports.createThrottledTouchLastUsed = exports.rotateApiKey = exports.maskApiKey = exports.parseApiKey = exports.generateApiKey = exports.normalizeIp = exports.buildDefaultContext = exports.extractRawKey = exports.verifyApiKey = exports.timingSafeEqualHex = exports.scopedHmacHasher = exports.sha256Hasher = void 0;
+exports.MemoryNonceStore = exports.sha256Hex = exports.signRequest = exports.buildCanonicalString = exports.redactFields = exports.redactUrl = exports.scheduleRefundOnFinish = exports.createRateLimitCore = exports.hmacBodyFieldKey = exports.decodedJwtKey = exports.verifiedIdentityKey = exports.ipKey = exports.defaultKeyGenerator = exports.MemoryRateLimitStore = exports.auditDeniedHook = exports.auditRateLimitHook = exports.auditFailureHook = exports.ConsoleAuditSink = exports.buildAuditEvent = exports.AuditBuffer = exports.createThrottledTouchLastUsed = exports.rotateApiKey = exports.maskApiKey = exports.parseApiKey = exports.generateApiKey = exports.normalizeIp = exports.buildDefaultContext = exports.extractRawKey = exports.verifyApiKey = exports.timingSafeEqualHex = exports.scopedHmacHasher = exports.sha256Hasher = void 0;
 var hashers_1 = require("./api-key/hashers");
 Object.defineProperty(exports, "sha256Hasher", { enumerable: true, get: function () { return hashers_1.sha256Hasher; } });
 Object.defineProperty(exports, "scopedHmacHasher", { enumerable: true, get: function () { return hashers_1.scopedHmacHasher; } });
@@ -39,6 +39,9 @@ Object.defineProperty(exports, "ipKey", { enumerable: true, get: function () { r
 Object.defineProperty(exports, "verifiedIdentityKey", { enumerable: true, get: function () { return keyGenerator_1.verifiedIdentityKey; } });
 Object.defineProperty(exports, "decodedJwtKey", { enumerable: true, get: function () { return keyGenerator_1.decodedJwtKey; } });
 Object.defineProperty(exports, "hmacBodyFieldKey", { enumerable: true, get: function () { return keyGenerator_1.hmacBodyFieldKey; } });
+var limiter_1 = require("./rate-limit/limiter");
+Object.defineProperty(exports, "createRateLimitCore", { enumerable: true, get: function () { return limiter_1.createRateLimitCore; } });
+Object.defineProperty(exports, "scheduleRefundOnFinish", { enumerable: true, get: function () { return limiter_1.scheduleRefundOnFinish; } });
 var redactUrl_1 = require("./redact/redactUrl");
 Object.defineProperty(exports, "redactUrl", { enumerable: true, get: function () { return redactUrl_1.redactUrl; } });
 var redactFields_1 = require("./redact/redactFields");

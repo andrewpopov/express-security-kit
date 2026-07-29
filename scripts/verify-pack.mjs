@@ -10,6 +10,10 @@
  *      see the names for ESM consumers) from BOTH the root entry and `./core`.
  *   4. Neither the root entry nor `./core` leaks `RedisRateLimitStore` — it is
  *      only reachable via the `./redis-store` subpath.
+ *   5. `./fastify` exports `createApiKeyAuth` and `corsOptions` with the
+ *      `fastify` peer ABSENT from the consumer — proving the Fastify
+ *      adapter's types-only `import type { ... } from 'fastify'` discipline
+ *      (mirrors the `./express/cors` absent-peer check for `cors`).
  *
  * Exits non-zero with a clear message on any failure.
  */
@@ -61,6 +65,9 @@ try {
   if (!existsSync(join(pkgRoot, 'dist', 'express', 'webhook', 'createWebhookVerifier.d.ts'))) {
     fail('dist/express/webhook/createWebhookVerifier.d.ts is missing after build');
   }
+  if (!existsSync(join(pkgRoot, 'dist', 'fastify', 'index.d.ts'))) {
+    fail('dist/fastify/index.d.ts is missing after build');
+  }
 
   console.log('[verify:pack] Packing tarball...');
   const packOut = run('npm', ['pack', '--json', '--pack-destination', workDir], {
@@ -93,11 +100,15 @@ try {
   if (!contents.includes('package/dist/express/webhook/createWebhookVerifier.d.ts')) {
     fail('dist/express/webhook/createWebhookVerifier.d.ts is not present in the packed tarball');
   }
+  if (!contents.includes('package/dist/fastify/index.d.ts')) {
+    fail('dist/fastify/index.d.ts is not present in the packed tarball');
+  }
   console.log(
     '[verify:pack] OK: dist/index.d.ts, dist/core/index.d.ts, ' +
       'dist/core/signing/nonce-redis.d.ts, dist/core/cors/policy.d.ts, ' +
-      'dist/express/cors/corsOptions.d.ts, dist/core/webhook/verify.d.ts, and ' +
-      'dist/express/webhook/createWebhookVerifier.d.ts ship in tarball',
+      'dist/express/cors/corsOptions.d.ts, dist/core/webhook/verify.d.ts, ' +
+      'dist/express/webhook/createWebhookVerifier.d.ts, and ' +
+      'dist/fastify/index.d.ts ship in tarball',
   );
 
   // Set up a throwaway consumer project and install the tarball.
@@ -253,6 +264,25 @@ try {
       console.error('CJS: createWebhookVerifier missing from main entry (v1.2.1 root re-export)');
       process.exit(19);
     }
+    // './fastify' subpath: same absent-peer consumer as above (only 'express'
+    // + 'helmet' installed, no 'fastify') — every factory here uses 'fastify'
+    // as a TYPE only, never a runtime import, so this proves the whole Fastify
+    // adapter loads with the 'fastify' peer absent. EVERY export of the
+    // subpath must be listed: a new factory that accidentally value-imports
+    // 'fastify' is only caught if something actually reaches for it here.
+    const fastifyAdapter = require('${pkg.name}/fastify');
+    if (typeof fastifyAdapter.createApiKeyAuth !== 'function') {
+      console.error('CJS: ./fastify subpath missing createApiKeyAuth (with fastify peer absent)');
+      process.exit(22);
+    }
+    if (typeof fastifyAdapter.corsOptions !== 'function') {
+      console.error('CJS: ./fastify subpath missing corsOptions (with fastify peer absent)');
+      process.exit(23);
+    }
+    if (typeof fastifyAdapter.createRateLimiter !== 'function') {
+      console.error('CJS: ./fastify subpath missing createRateLimiter (with fastify peer absent)');
+      process.exit(24);
+    }
     console.log('CJS OK');
   `;
   writeFileSync(join(consumerDir, 'smoke.cjs'), cjsSmoke);
@@ -297,6 +327,11 @@ try {
     import { corsOptions } from '${pkg.name}/express/cors';
     import { verifyWebhookSignature } from '${pkg.name}/webhook';
     import { createWebhookVerifier } from '${pkg.name}/express/webhook';
+    import {
+      createApiKeyAuth as fastifyCreateApiKeyAuth,
+      corsOptions as fastifyCorsOptions,
+      createRateLimiter as fastifyCreateRateLimiter,
+    } from '${pkg.name}/fastify';
     import {
       verifyApiKey as coreVerifyApiKey, extractRawKey, sha256Hasher as coreSha256Hasher,
       scopedHmacHasher, timingSafeEqualHex as coreTimingSafeEqualHex, MemoryRateLimitStore,
@@ -417,6 +452,21 @@ try {
     if (typeof rootCreateWebhookVerifier !== 'function') {
       console.error('ESM: createWebhookVerifier missing from main entry (v1.2.1 root re-export)');
       process.exit(19);
+    }
+    // './fastify' ESM named imports resolve — same absent-'fastify'-peer
+    // consumer, proving the adapter's types-only fastify imports never pull
+    // the framework in at runtime.
+    if (typeof fastifyCreateApiKeyAuth !== 'function') {
+      console.error('ESM: ./fastify createApiKeyAuth import failed (fastify peer absent)');
+      process.exit(22);
+    }
+    if (typeof fastifyCorsOptions !== 'function') {
+      console.error('ESM: ./fastify corsOptions import failed (fastify peer absent)');
+      process.exit(23);
+    }
+    if (typeof fastifyCreateRateLimiter !== 'function') {
+      console.error('ESM: ./fastify createRateLimiter import failed (fastify peer absent)');
+      process.exit(24);
     }
     console.log('ESM OK');
   `;

@@ -19,6 +19,12 @@
  * in test fixtures without violating the "core ships express-free" guarantee,
  * since __tests__ are excluded from the tsc build (see tsconfig.json) and are
  * never shipped in dist/.
+ *
+ * Also guards the two adapters' independence from each other: `src/fastify/`
+ * must never import `express`, and `src/express/` must never import
+ * `fastify` — each adapter must load standalone with the OTHER framework's
+ * peer absent. Same `FORBIDDEN_IMPORT` machinery and `isTestFile` exemption
+ * as the core check above.
  */
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
@@ -26,6 +32,8 @@ import { dirname, join, relative, resolve, sep } from 'node:path';
 const pkgRoot = new URL('..', import.meta.url).pathname;
 const coreRoot = join(pkgRoot, 'src', 'core');
 const coreRootWithSep = coreRoot.endsWith(sep) ? coreRoot : coreRoot + sep;
+const expressRoot = join(pkgRoot, 'src', 'express');
+const fastifyRoot = join(pkgRoot, 'src', 'fastify');
 
 // Matches every static import form that pulls the framework into the module
 // graph: `from 'express'`, `require('express')` (incl. `import x = require(...)`),
@@ -58,6 +66,23 @@ function findEscapingImports(file, contents) {
     }
   }
   return escapes;
+}
+
+/**
+ * Full matches of FORBIDDEN_IMPORT whose captured specifier is one of
+ * `forbiddenNames` — used by the adapter-independence checks below, which
+ * (unlike the core check) only forbid ONE of the four names per directory.
+ */
+function findForbiddenImportsOf(contents, forbiddenNames) {
+  const regex = new RegExp(FORBIDDEN_IMPORT.source, 'g');
+  const found = [];
+  let match;
+  while ((match = regex.exec(contents)) !== null) {
+    if (forbiddenNames.includes(match[1])) {
+      found.push(match[0]);
+    }
+  }
+  return found;
 }
 
 function walk(dir, files = []) {
@@ -117,3 +142,47 @@ if (escapeViolations.length > 0) {
 
 console.log('[check-core-agnostic] OK: no express/fastify/cors/ioredis imports under src/core/');
 console.log('[check-core-agnostic] OK: no relative imports escape src/core/');
+
+// Adapter independence: each adapter must load with the OTHER framework's
+// peer absent, so neither may import the other's framework.
+const expressImportsFastify = [];
+for (const file of walk(expressRoot)) {
+  const relPath = relative(pkgRoot, file);
+  if (isTestFile(relPath)) continue;
+  const contents = readFileSync(file, 'utf8');
+  for (const match of findForbiddenImportsOf(contents, ['fastify'])) {
+    expressImportsFastify.push({ file: relPath, match });
+  }
+}
+
+if (expressImportsFastify.length > 0) {
+  console.error('\n[check-core-agnostic] FAIL: src/express/ must never import fastify.\n');
+  for (const { file, match } of expressImportsFastify) {
+    console.error(`  ${file}: ${match.trim()}`);
+  }
+  console.error('');
+  process.exit(1);
+}
+
+console.log('[check-core-agnostic] OK: no fastify imports under src/express/');
+
+const fastifyImportsExpress = [];
+for (const file of walk(fastifyRoot)) {
+  const relPath = relative(pkgRoot, file);
+  if (isTestFile(relPath)) continue;
+  const contents = readFileSync(file, 'utf8');
+  for (const match of findForbiddenImportsOf(contents, ['express'])) {
+    fastifyImportsExpress.push({ file: relPath, match });
+  }
+}
+
+if (fastifyImportsExpress.length > 0) {
+  console.error('\n[check-core-agnostic] FAIL: src/fastify/ must never import express.\n');
+  for (const { file, match } of fastifyImportsExpress) {
+    console.error(`  ${file}: ${match.trim()}`);
+  }
+  console.error('');
+  process.exit(1);
+}
+
+console.log('[check-core-agnostic] OK: no express imports under src/fastify/');

@@ -1,0 +1,6 @@
+---
+kind: added
+summary: `createRateLimitCore()` — the rate-limit decision algorithm, carved into the framework-agnostic core
+---
+
+The v1.1.0 core carve moved the rate-limit STORE into `src/core/rate-limit/` but left the DECISION algorithm behind in the Express middleware. It now lives in core as `createRateLimitCore()`, exported from `@andrewpopov/express-security-kit/core`: `evaluate(req)` returns a `skip` / `allow` / `reject` outcome carrying the decision, the header list, and the 429 body, and the adapter does nothing but write them. The fixed and sliding window algorithms — including the weighted previous-window estimate — therefore exist exactly once, rather than once per framework, which is what lets the Fastify limiter be a thin adapter instead of a second copy of security-critical arithmetic. **No behaviour change for Express consumers**: the middleware's public surface (`createRateLimiter`, `RateLimiterConfig`, `RateLimitRejection`, `KeyGenerator`, ...) and every one of its semantics — fail-open on store errors, the `onLimit` hook that can never turn a 429 into an allow, `skipSuccessful` refunding only on a genuinely finished response — are unchanged and still covered by the same tests.

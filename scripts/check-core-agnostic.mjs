@@ -28,8 +28,9 @@
  */
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const pkgRoot = new URL('..', import.meta.url).pathname;
+const pkgRoot = fileURLToPath(new URL('..', import.meta.url));
 const coreRoot = join(pkgRoot, 'src', 'core');
 const coreRootWithSep = coreRoot.endsWith(sep) ? coreRoot : coreRoot + sep;
 const expressRoot = join(pkgRoot, 'src', 'express');

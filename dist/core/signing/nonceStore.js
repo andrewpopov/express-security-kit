@@ -25,10 +25,12 @@ class MemoryNonceStore {
         this.cleanupIntervalMs =
             options.cleanupIntervalMs ?? DEFAULT_CLEANUP_INTERVAL_MS;
         const maxTrackedNonces = options.maxTrackedNonces ?? DEFAULT_MAX_TRACKED_NONCES;
-        if (!Number.isFinite(maxTrackedNonces) || maxTrackedNonces <= 0) {
+        if (!Number.isInteger(maxTrackedNonces) || maxTrackedNonces <= 0) {
             // A non-positive cap would evict every nonce immediately, silently
-            // disabling replay protection. Reject it outright.
-            throw new Error('MemoryNonceStore: maxTrackedNonces must be a positive number');
+            // disabling replay protection. A fractional cap has no coherent meaning
+            // either — the reservation check would admit ceil(cap) entries while the
+            // configured value reads as a lower bound. Reject both outright.
+            throw new Error('MemoryNonceStore: maxTrackedNonces must be a positive integer');
         }
         this.maxTrackedNonces = maxTrackedNonces;
         this.clock = options.now ?? Date.now;
@@ -51,28 +53,34 @@ class MemoryNonceStore {
         if (existing && existing.expiresAt > now) {
             return 'replay';
         }
-        // New (or expired) — record it. Re-insert to refresh eviction recency.
+        // New (or expired) — drop any stale entry for this exact key first so it
+        // doesn't count twice against capacity below.
         this.entries.delete(key);
+        // Reserve room for the entry BEFORE inserting it: a throw here must leave
+        // the store exactly as it was, never with a dangling over-cap entry.
+        this.reserveCapacity(now);
         this.entries.set(key, { expiresAt: now + ttlMs });
-        this.enforceCapacity(now);
         return 'ok';
     }
     /**
-     * Keep the store within its cap WITHOUT ever evicting a live nonce (evicting a
-     * within-TTL nonce would let its request be replayed). First prune everything
-     * that has expired; if the store is STILL over capacity, every remaining entry
-     * is live — so we THROW rather than evict. The verifier maps a store throw to
-     * `store_error` → 401, i.e. it fails CLOSED.
+     * Ensure there is room for one more entry WITHOUT ever evicting a live nonce
+     * (evicting a within-TTL nonce would let its request be replayed). Only when
+     * the store is already at/over its cap do we prune everything that has
+     * expired; if it is STILL at/over cap afterward, every remaining entry is
+     * live — so we THROW rather than evict. Called BEFORE the new entry is
+     * inserted, so a rejected nonce never grows the store past `maxTrackedNonces`.
+     * The verifier maps a store throw to `store_error` → 401, i.e. it fails
+     * CLOSED.
      */
-    enforceCapacity(now) {
-        if (this.entries.size <= this.maxTrackedNonces)
+    reserveCapacity(now) {
+        if (this.entries.size < this.maxTrackedNonces)
             return;
         for (const [key, entry] of this.entries) {
             if (entry.expiresAt <= now) {
                 this.entries.delete(key);
             }
         }
-        if (this.entries.size > this.maxTrackedNonces) {
+        if (this.entries.size >= this.maxTrackedNonces) {
             throw new Error('MemoryNonceStore capacity exceeded (all tracked nonces live)');
         }
     }

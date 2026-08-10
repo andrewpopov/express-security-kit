@@ -229,6 +229,57 @@ describe('verifyApiKey — IP allowlist normalization (IPv4-mapped IPv6)', () =>
   });
 });
 
+describe('verifyApiKey — hmacSecret passthrough (default context)', () => {
+  it('copies record.hmacSecret into context.hmacSecret when present', async () => {
+    const out = await verifyApiKey(
+      baseConfig({ lookup: async () => record({ hmacSecret: 's3cr3t' }) }),
+      makeReq(bearer(RAW)),
+    );
+    expect(out.ok).toBe(true);
+    if (!out.ok) throw new Error('unreachable');
+    expect(out.context.hmacSecret).toBe('s3cr3t');
+  });
+
+  it('a record without hmacSecret leaves context.hmacSecret undefined, never a literal null', async () => {
+    const out = await verifyApiKey(baseConfig(), makeReq(bearer(RAW)));
+    expect(out.ok).toBe(true);
+    if (!out.ok) throw new Error('unreachable');
+    expect(out.context.hmacSecret).toBeUndefined();
+    expect(out.context.hmacSecret).not.toBeNull();
+  });
+
+  it('a record with hmacSecret: null also resolves to undefined, not a literal null', async () => {
+    const out = await verifyApiKey(
+      baseConfig({ lookup: async () => record({ hmacSecret: null }) }),
+      makeReq(bearer(RAW)),
+    );
+    expect(out.ok).toBe(true);
+    if (!out.ok) throw new Error('unreachable');
+    expect(out.context.hmacSecret).toBeUndefined();
+  });
+
+  it('other default-context fields are unchanged alongside hmacSecret (no regression)', async () => {
+    const out = await verifyApiKey(
+      baseConfig({
+        lookup: async () => record({
+          scopes: ['read'],
+          hmacSecret: 'sek',
+          rateLimitOverride: { windowMs: 1000, max: 5 },
+        }),
+      }),
+      makeReq(bearer(RAW)),
+    );
+    expect(out.ok).toBe(true);
+    if (!out.ok) throw new Error('unreachable');
+    expect(out.context.principalType).toBe('apiKey');
+    expect(out.context.principalId).toBe('key-1');
+    expect(out.context.keyId).toBe('key-1');
+    expect(out.context.scopes).toEqual(['read']);
+    expect(out.context.rateLimitOverride).toEqual({ windowMs: 1000, max: 5 });
+    expect(out.context.hmacSecret).toBe('sek');
+  });
+});
+
 describe('verifyApiKey — meta passthrough', () => {
   it('copies record.meta into context.meta', async () => {
     const out = await verifyApiKey(

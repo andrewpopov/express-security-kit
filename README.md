@@ -659,6 +659,19 @@ client-side helper that produces compatible headers. The canonical scheme is
 documented below, so existing hand-rolled signed clients can be matched
 byte-for-byte.
 
+The verification DECISION itself is framework-agnostic: `createRequestSignatureVerifierCore(config)`,
+exported from `@andrewpopov/express-security-kit/core`, takes plain data (method,
+url, the three header values, the body string, the resolved secret, the nonce
+scope, and whether a raw body was present) and returns `{ type: 'ok' }` or
+`{ type: 'fail', reason }` — no Express (or Fastify) types involved. It runs
+the exact same ordered checks (secret → timestamp → skew → nonce → signature
+→ `requireRawBody` → HMAC compare → nonce consumption) and the same
+fail-closed semantics as `createRequestSigningVerifier` below, which is a thin
+adapter over it: Express-specific extraction (headers, body source, secret
+resolution, nonce scope) in, an `onFailure` call or `next()` out. Any other
+adapter (a Fastify signing verifier, say) can reuse the same core instead of
+reimplementing signature/replay verification.
+
 ### The scheme
 
 Canonical string = five LF-joined lines:

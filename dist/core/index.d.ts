@@ -31,3 +31,5 @@ export { buildCanonicalString, signRequest, sha256Hex, } from './signing/signReq
 export type { CanonicalStringInput, SignRequestInput, SignedRequest, } from './signing/signRequest';
 export { MemoryNonceStore } from './signing/nonceStore';
 export type { NonceStore, MemoryNonceStoreOptions, } from './signing/nonceStore';
+export { createRequestSignatureVerifierCore } from './signing/verifyRequestSignature';
+export type { RequestSignatureVerifierCore, RequestSignatureVerifierConfigCore, RequestSignatureVerifyInput, RequestSignatureVerifyOutcome, SigningFailureReason, SigningLogger, } from './signing/verifyRequestSignature';

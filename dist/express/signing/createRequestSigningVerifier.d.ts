@@ -1,12 +1,8 @@
 import type { Request, RequestHandler } from 'express';
 import type { SecurityContext } from '../../core/context';
+import type { SigningFailureReason, SigningLogger } from '../../core/signing/verifyRequestSignature';
 import type { NonceStore } from '../../core/signing/nonceStore';
-/** Machine-readable failure reasons (passed to onFailure, never to the client). */
-export type SigningFailureReason = 'no_secret' | 'timestamp' | 'skew' | 'nonce' | 'signature' | 'replay' | 'store_error' | 'no_raw_body' | 'error';
-/** Minimal logger surface; defaults to console. */
-export interface SigningLogger {
-    warn: (message: string, meta?: unknown) => void;
-}
+export type { SigningFailureReason, SigningLogger };
 export interface SigningHeaderNames {
     timestamp: string;
     nonce: string;
@@ -26,7 +22,14 @@ export interface RequestSigningVerifierConfig {
     headerNames?: Partial<SigningHeaderNames>;
     /** Nonce format. Default /^[A-Za-z0-9:_-]{8,128}$/. */
     nonceFormat?: RegExp;
-    /** Replay-protection store (required). */
+    /**
+     * Replay-protection store (required). Read FRESH on every request (via an
+     * accessor passed to the core), not captured once at construction — so
+     * replacing `config.nonceStore` after this middleware is built (store
+     * rotation/recovery) takes effect on the very next request, matching the
+     * pre-carve middleware's behaviour. Mutate this property on the SAME
+     * config object passed in here for the late binding to be observed.
+     */
     nonceStore: NonceStore;
     /**
      * Replay scope key. Default: `ctx.keyId ?? ctx.principalId ?? 'global'`.
@@ -57,8 +60,12 @@ export interface RequestSigningVerifierConfig {
  * an unavailable nonce store — yields a GENERIC 401 and the request does NOT
  * proceed. The specific reason goes only to `onFailure`.
  *
- * The signed nonce is consumed AFTER the signature is proven valid and BEFORE
- * `next()`, so an attacker cannot burn a victim's nonce with an unsigned/forged
- * request, and a valid signature can be used at most once within the skew TTL.
+ * This is a THIN adapter over {@link createRequestSignatureVerifierCore}: all
+ * decision logic (ordering, fail-closed semantics, the nonce-consumed-after-
+ * signature-proven rule) lives in the framework-agnostic core. This module
+ * only does Express-specific extraction — reading headers, resolving the body
+ * source, resolving the secret, deriving the nonce scope, and the
+ * `requireRawBody` bodyless/custom-extractor exemption — and translates the
+ * core's outcome into a response (`onFailure` + generic 401, or `next()`).
  */
 export declare function createRequestSigningVerifier(config: RequestSigningVerifierConfig): RequestHandler;

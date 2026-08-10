@@ -4,7 +4,7 @@
 // ESM consumers of the CommonJS build. NO file reachable from here may import
 // 'express' or 'fastify' (enforced by scripts/check-core-agnostic.mjs).
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.MemoryNonceStore = exports.sha256Hex = exports.signRequest = exports.buildCanonicalString = exports.redactFields = exports.redactUrl = exports.scheduleRefundOnFinish = exports.createRateLimitCore = exports.hmacBodyFieldKey = exports.decodedJwtKey = exports.verifiedIdentityKey = exports.ipKey = exports.defaultKeyGenerator = exports.MemoryRateLimitStore = exports.auditDeniedHook = exports.auditRateLimitHook = exports.auditFailureHook = exports.ConsoleAuditSink = exports.buildAuditEvent = exports.AuditBuffer = exports.createThrottledTouchLastUsed = exports.rotateApiKey = exports.maskApiKey = exports.parseApiKey = exports.generateApiKey = exports.createCanonicalRawAuthenticator = exports.normalizeIp = exports.describeApiKeyConfigError = exports.buildDefaultContext = exports.extractRawKey = exports.verifyApiKey = exports.timingSafeEqualHex = exports.scopedHmacHasher = exports.sha256Hasher = void 0;
+exports.createRequestSignatureVerifierCore = exports.MemoryNonceStore = exports.sha256Hex = exports.signRequest = exports.buildCanonicalString = exports.redactFields = exports.redactUrl = exports.scheduleRefundOnFinish = exports.createRateLimitCore = exports.hmacBodyFieldKey = exports.decodedJwtKey = exports.verifiedIdentityKey = exports.ipKey = exports.defaultKeyGenerator = exports.MemoryRateLimitStore = exports.auditDeniedHook = exports.auditRateLimitHook = exports.auditFailureHook = exports.ConsoleAuditSink = exports.buildAuditEvent = exports.AuditBuffer = exports.createThrottledTouchLastUsed = exports.rotateApiKey = exports.maskApiKey = exports.parseApiKey = exports.generateApiKey = exports.createCanonicalRawAuthenticator = exports.normalizeIp = exports.describeApiKeyConfigError = exports.buildDefaultContext = exports.extractRawKey = exports.verifyApiKey = exports.timingSafeEqualHex = exports.scopedHmacHasher = exports.sha256Hasher = void 0;
 var hashers_1 = require("./api-key/hashers");
 Object.defineProperty(exports, "sha256Hasher", { enumerable: true, get: function () { return hashers_1.sha256Hasher; } });
 Object.defineProperty(exports, "scopedHmacHasher", { enumerable: true, get: function () { return hashers_1.scopedHmacHasher; } });
@@ -55,6 +55,8 @@ Object.defineProperty(exports, "signRequest", { enumerable: true, get: function 
 Object.defineProperty(exports, "sha256Hex", { enumerable: true, get: function () { return signRequest_1.sha256Hex; } });
 var nonceStore_1 = require("./signing/nonceStore");
 Object.defineProperty(exports, "MemoryNonceStore", { enumerable: true, get: function () { return nonceStore_1.MemoryNonceStore; } });
+var verifyRequestSignature_1 = require("./signing/verifyRequestSignature");
+Object.defineProperty(exports, "createRequestSignatureVerifierCore", { enumerable: true, get: function () { return verifyRequestSignature_1.createRequestSignatureVerifierCore; } });
 // Note: the Redis store is intentionally NOT exported here. Import it from the
 // '@andrewpopov/express-security-kit/redis-store' subpath so this entry never
 // references ioredis.

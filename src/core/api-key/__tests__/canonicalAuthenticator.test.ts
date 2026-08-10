@@ -96,17 +96,17 @@ describe('createCanonicalRawAuthenticator — rejections', () => {
     expect(out).toEqual({ ok: false, reason: 'hash_mismatch' });
   });
 
-  it('malformed/unparseable key (no ".") is CURRENTLY reported as not_found — a known fidelity gap (PKG-154), not a designed behavior. `RawApiKeyAuthentication` has no `malformed` member today, so this collapses into the same reason as "unknown keyId"; the client still gets a generic 401 either way, so nothing leaks and nothing is mis-authorized, but the machine-readable reason is imprecise. See PKG-154 to widen the type and fix the mapping.', async () => {
+  it('malformed/unparseable key (no ".") is reported as malformed, distinct from "unknown keyId" (PKG-154). The client still gets the same generic 401 either way (see verifyApiKey), but the machine-readable reason now tells a structurally broken credential apart from one that simply was never issued.', async () => {
     const store = memoryStore({});
     const rawAuthenticator = createCanonicalRawAuthenticator<Request>({
       prefix: PREFIX,
       findByKeyId: store.findByKeyId,
     });
     const out = await rawAuthenticator(`${PREFIX}not-even-a-real-key`, makeReq());
-    expect(out).toEqual({ ok: false, reason: 'not_found' });
+    expect(out).toEqual({ ok: false, reason: 'malformed' });
   });
 
-  it('wrong prefix is ALSO reported as not_found (bad_prefix is reserved for verifyApiKey\'s own upstream check, which runs first in the real pipeline) — shares the same PKG-154 fidelity gap as the malformed-key case above, since both hit the same parseApiKey-returned-null branch', async () => {
+  it('wrong prefix is reported as not_found, not malformed — a wrong-prefix credential was never parsed as this authenticator\'s format at all, so it is not a structural-malformation case (PKG-154 only sharpened the "prefix matched but parsing failed" branch). It also does not become bad_prefix: that reason is reserved for verifyApiKey\'s own upstream prefix check, which runs first in the real pipeline and would reject this key before this authenticator is ever invoked.', async () => {
     const store = memoryStore({});
     const rawAuthenticator = createCanonicalRawAuthenticator<Request>({
       prefix: PREFIX,

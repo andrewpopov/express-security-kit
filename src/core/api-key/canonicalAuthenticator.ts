@@ -65,13 +65,21 @@ export interface CreateCanonicalRawAuthenticatorOptions {
  * Failure reasons (never 'error' — a store/hasher failure is reported as
  * 'unavailable', which `verifyApiKey` fails closed at `errorStatus`, default
  * 503, not as a 401):
- * - malformed/unparseable key, or a key that doesn't match `prefix` → `not_found`
- *   (a `RawApiKeyAuthentication` cannot report `bad_prefix` — that reason is
- *   reserved for `verifyApiKey`'s own upstream prefix check, which runs BEFORE
- *   this authenticator is ever invoked in the normal `createApiKeyAuth`
- *   pipeline). NOTE: this collapses "malformed" and "unknown keyId" into the
- *   same `not_found` reason — a known fidelity gap, not a designed behavior;
- *   see PKG-154.
+ * - key doesn't match `prefix` → `not_found` (a `RawApiKeyAuthentication`
+ *   cannot report `bad_prefix` — that reason is reserved for `verifyApiKey`'s
+ *   own upstream prefix check, which runs BEFORE this authenticator is ever
+ *   invoked in the normal `createApiKeyAuth` pipeline; a wrong-prefix key
+ *   handed to this function directly, bypassing that pipeline, still gets the
+ *   generic `not_found` rather than a reason this authenticator has no
+ *   business claiming).
+ * - prefix matches but the key is structurally unparseable (no `.` separator,
+ *   or an empty keyId/secret on either side of it) → `malformed` (PKG-154).
+ *   Distinct from unknown-keyId `not_found` below: `malformed` means the
+ *   credential could never have been valid regardless of what's in the
+ *   store — usually a client bug or a truncated secret — while `not_found`
+ *   means it's well-formed but nobody issued it — usually revocation or
+ *   probing. Same generic 401 either way; this only sharpens the
+ *   machine-readable reason for monitoring/`onFailure`.
  * - unknown keyId (`findByKeyId` resolves `null`) → `not_found`, but ONLY
  *   after doing the same `hasher` + constant-time-compare work a known keyId
  *   would (against a fixed dummy hash — see below). An unknown keyId that
@@ -119,9 +127,22 @@ export function createCanonicalRawAuthenticator<
   }
 
   return async (rawKey: string): Promise<RawApiKeyAuthentication> => {
+    // parseApiKey returns null for two different reasons that must NOT be
+    // collapsed into the same report: a prefix mismatch (not this
+    // authenticator's call to make — `bad_prefix` is reserved for
+    // verifyApiKey's own upstream check, see the docstring above) and a
+    // genuine STRUCTURAL failure (no '.' separator, or an empty
+    // keyId/secret) once the prefix DOES match. Check the prefix first,
+    // cheaply, so the two are distinguishable without re-implementing
+    // parseApiKey's own parsing — parseApiKey remains the single source of
+    // truth for what "parses" means; this only tells its `null` apart from
+    // itself.
+    if (!rawKey.startsWith(prefix)) {
+      return { ok: false, reason: 'not_found' };
+    }
     const parsed = parseApiKey(rawKey, prefix);
     if (!parsed) {
-      return { ok: false, reason: 'not_found' };
+      return { ok: false, reason: 'malformed' };
     }
 
     let record: CanonicalApiKeyRecord | null;

@@ -67,8 +67,34 @@ export type RawApiKeyAuthentication = {
      * `verifyApiKey` and already maps to `'error'`, so `'unavailable'` only
      * matters when the authenticator wants to report this INLINE rather
      * than by throwing.
+     *
+     * `'malformed'` is allowed here (PKG-154): an authenticator that parses
+     * its own credential format can report a STRUCTURALLY invalid key
+     * (e.g. missing a required separator) distinctly from an unknown one
+     * (`'not_found'`) — the client still gets the same generic 401 either
+     * way (see `verifyApiKey`); this only sharpens what monitoring and
+     * `onFailure` see, distinguishing "a client is sending broken
+     * credentials" from "a client is presenting keys we never issued".
+     *
+     * The other exclusions stay, and for different reasons each:
+     * `'missing'` and `'bad_prefix'` are `verifyApiKey`'s own upstream
+     * extraction/prefix checks (steps 1–2), which run BEFORE any
+     * authenticator is invoked in the normal `createApiKeyAuth` pipeline —
+     * an authenticator never legitimately observes "absent" or
+     * "wrong-prefix" there, so it has nothing truthful to report with
+     * those two reasons (a wrong-prefix key handed to it directly,
+     * bypassing that pipeline, is still just `not_found` — see
+     * `createCanonicalRawAuthenticator`'s docstring). `'ip_denied'` is
+     * `verifyApiKey`'s own DOWNSTREAM check (step 6), run against the
+     * `record` only after authentication already succeeded — an
+     * authenticator returning `ok: false` hasn't reached that point.
+     * `'error'` is superseded: a throw already maps to `'error'` (caught by
+     * `verifyApiKey`), and `'unavailable'` exists for reporting the same
+     * infra-failure case inline; an authenticator claiming `'error'`
+     * directly would skip `resolveErrorStatus` and incorrectly land on a
+     * 401 instead of `errorStatus`.
      */
-    reason?: Exclude<ApiKeyFailureReason, 'missing' | 'malformed' | 'bad_prefix' | 'ip_denied' | 'error'>;
+    reason?: Exclude<ApiKeyFailureReason, 'missing' | 'bad_prefix' | 'ip_denied' | 'error'>;
 };
 export interface ApiKeyStaticKey {
     /** Human name / identifier for this bootstrap key (becomes keyId). */

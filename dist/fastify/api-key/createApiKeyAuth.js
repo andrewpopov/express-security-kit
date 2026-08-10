@@ -47,8 +47,19 @@ function defaultErrorBody(status) {
  * the route handler; failure sends the reply directly — a Fastify
  * `preHandler` that sends a reply short-circuits the lifecycle, so the route
  * handler is never reached.
+ *
+ * @throws {Error} synchronously, at construction time (never per-request), if
+ * `config` supplies NEITHER `rawAuthenticator` nor `lookup` — a programmer
+ * error caught eagerly rather than surfacing as a 503 on every request. See
+ * `ApiKeyAuthConfigCore.rawAuthenticator`. Supplying BOTH does not throw —
+ * `rawAuthenticator` wins and a one-time deprecation warning is logged.
  */
 function createApiKeyAuth(config) {
+    const configError = (0, verifyApiKey_1.describeApiKeyConfigError)(config);
+    if (configError) {
+        throw new Error(`createApiKeyAuth: ${configError}`);
+    }
+    (0, verifyApiKey_1.warnIfBothCredentialPathsConfigured)(config);
     const logger = config.logger ?? consoleLogger;
     const fail = async (request, reply, reason, status) => {
         // An audit hook must never affect the auth decision, throw out, or leak an

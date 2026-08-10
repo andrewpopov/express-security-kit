@@ -1,6 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { Request } from 'express';
-import { verifyApiKey } from '../verifyApiKey';
+import {
+  verifyApiKey,
+  describeApiKeyConfigError,
+  warnIfBothCredentialPathsConfigured,
+} from '../verifyApiKey';
 import { sha256Hasher } from '../hashers';
 import type { ApiKeyRecord } from '../types';
 import type { ApiKeyAuthConfigCore as ApiKeyAuthConfig } from '../types';
@@ -47,8 +51,11 @@ describe('verifyApiKey — success', () => {
       ? { ok: true as const, record: { id: 'key-1', scopes: ['read'] } }
       : { ok: false as const, reason: 'not_found' as const });
     const hasher = vi.fn(() => { throw new Error('legacy hasher must not run'); });
+    // No `lookup` here: PKG-149 Finding 2 made `rawAuthenticator` + `lookup`
+    // mutually exclusive (config error), so the canonical path no longer
+    // needs a dead `lookup` to satisfy the type — this IS that regression test.
     const out = await verifyApiKey(
-      { prefix: 'cairn_', lookup: async () => { throw new Error('legacy lookup must not run'); }, rawAuthenticator, hasher },
+      { prefix: 'cairn_', rawAuthenticator, hasher },
       makeReq(bearer('cairn_key-1.secret-value-which-is-long-enough')),
     );
     expect(out).toMatchObject({ ok: true, context: { principalId: 'key-1', scopes: ['read'] } });
@@ -298,7 +305,7 @@ describe('verifyApiKey — rawAuthenticator unavailable (infra unreachable, e.g.
 
   it('→ ok:false, reason:unavailable, present:true, 503 by default', async () => {
     const out = await verifyApiKey(
-      { prefix: PREFIX, lookup: async () => { throw new Error('legacy lookup must not run'); }, rawAuthenticator: unavailableAuthenticator },
+      { prefix: PREFIX, rawAuthenticator: unavailableAuthenticator },
       makeReq(bearer(RAW)),
     );
     expect(out).toEqual({ ok: false, reason: 'unavailable', present: true, status: 503 });
@@ -306,7 +313,7 @@ describe('verifyApiKey — rawAuthenticator unavailable (infra unreachable, e.g.
 
   it('honors config.errorStatus, exactly like the internal error path', async () => {
     const out = await verifyApiKey(
-      { prefix: PREFIX, lookup: async () => null, rawAuthenticator: unavailableAuthenticator, errorStatus: 500 },
+      { prefix: PREFIX, rawAuthenticator: unavailableAuthenticator, errorStatus: 500 },
       makeReq(bearer(RAW)),
     );
     expect(out).toEqual({ ok: false, reason: 'unavailable', present: true, status: 500 });
@@ -316,12 +323,104 @@ describe('verifyApiKey — rawAuthenticator unavailable (infra unreachable, e.g.
     const out = await verifyApiKey(
       {
         prefix: PREFIX,
-        lookup: async () => null,
         rawAuthenticator: unavailableAuthenticator,
         onAuthenticated: () => { throw new Error('onAuthenticated must not run when unavailable'); },
       },
       makeReq(bearer(RAW)),
     );
     expect(out.ok).toBe(false);
+  });
+});
+
+describe('ApiKeyAuthConfigCore — canonical vs legacy config shape (PKG-149 Finding 2)', () => {
+  it('a canonical config compiles and runs WITHOUT a `lookup` at all', async () => {
+    // No `lookup` key on this object literal — Finding 2's core ask: the
+    // canonical path must not need a dead callback just to satisfy the type.
+    const config: ApiKeyAuthConfig = {
+      prefix: PREFIX,
+      rawAuthenticator: async () => ({ ok: true, record: record() }),
+    };
+    expect(describeApiKeyConfigError(config)).toBeNull();
+    const out = await verifyApiKey(config, makeReq(bearer(RAW)));
+    expect(out.ok).toBe(true);
+  });
+
+  it('a legacy config (lookup, no rawAuthenticator) is still valid', () => {
+    expect(describeApiKeyConfigError(baseConfig())).toBeNull();
+  });
+
+  it('supplying BOTH lookup and rawAuthenticator does NOT throw/error — rawAuthenticator wins, lookup is ignored (reversed: lookup used to be REQUIRED, so every canonical consumer had to supply a dead one)', async () => {
+    const lookup = vi.fn(async () => { throw new Error('legacy lookup must not run'); });
+    const out = await verifyApiKey(
+      {
+        prefix: PREFIX,
+        lookup,
+        rawAuthenticator: async () => ({ ok: true, record: record({ id: 'raw-authenticator-record' }) }),
+      },
+      makeReq(bearer(RAW)),
+    );
+    expect(out.ok).toBe(true);
+    if (!out.ok) throw new Error('unreachable');
+    expect(out.record?.id).toBe('raw-authenticator-record'); // rawAuthenticator's record, not lookup's
+    expect(lookup).not.toHaveBeenCalled();
+  });
+
+  it('supplying BOTH logs a ONE-TIME deprecation warning naming the config, via config.logger', async () => {
+    const warn = vi.fn();
+    const config: ApiKeyAuthConfig = {
+      prefix: PREFIX,
+      lookup: async () => record(),
+      rawAuthenticator: async () => ({ ok: true, record: record() }),
+      logger: { warn },
+    };
+    await verifyApiKey(config, makeReq(bearer(RAW)));
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toMatch(/rawAuthenticator.*lookup.*deprecated/is);
+
+    // A second call against the SAME config object does not warn again.
+    await verifyApiKey(config, makeReq(bearer(RAW)));
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('warnIfBothCredentialPathsConfigured never throws even if the logger throws', () => {
+    const config = {
+      lookup: async () => null,
+      rawAuthenticator: async () => ({ ok: false as const }),
+      logger: { warn: () => { throw new Error('logger boom'); } },
+    };
+    expect(() => warnIfBothCredentialPathsConfigured(config)).not.toThrow();
+  });
+
+  it('a config shaped like real consumers\' forced workaround (a dead `lookup` beside `rawAuthenticator`, e.g. cairn/smarthome/sano-os today) authenticates successfully with only a warning', async () => {
+    const material = { keyId: 'k1', secret: 'sekret' };
+    const config: ApiKeyAuthConfig = {
+      prefix: PREFIX,
+      // The forced-dead workaround these services carry today:
+      lookup: async () => null,
+      rawAuthenticator: async (rawKey) =>
+        rawKey === `${PREFIX}${material.keyId}.${material.secret}`
+          ? { ok: true, record: record({ id: material.keyId }) }
+          : { ok: false, reason: 'not_found' },
+    };
+    const out = await verifyApiKey(
+      config,
+      makeReq(bearer(`${PREFIX}${material.keyId}.${material.secret}`)),
+    );
+    expect(out.ok).toBe(true);
+  });
+
+  it('supplying NEITHER lookup nor rawAuthenticator fails closed with reason "error"', async () => {
+    const out = await verifyApiKey(
+      { prefix: PREFIX } as ApiKeyAuthConfig,
+      makeReq(bearer(RAW)),
+    );
+    expect(out).toEqual({ ok: false, reason: 'error', present: true, status: 503 });
+  });
+
+  it('describeApiKeyConfigError only flags NEITHER supplied — BOTH is valid (deprecated, not rejected)', () => {
+    expect(
+      describeApiKeyConfigError({ lookup: async () => null, rawAuthenticator: async () => ({ ok: false }) }),
+    ).toBeNull();
+    expect(describeApiKeyConfigError({})).toMatch(/either/);
   });
 });

@@ -45,7 +45,13 @@ const PREFIX = 'cairn_';
 const RAW = 'cairn_rawsecretvalue';
 const HASH = sha256Hasher()(RAW);
 
+// Legacy `lookup` default is omitted when `over` supplies a canonical
+// `rawAuthenticator` — the two are mutually exclusive (PKG-149 Finding 2);
+// supplying both is now a construction-time error, not a silent preference.
 function baseConfig(over: Partial<ApiKeyAuthConfig> = {}): ApiKeyAuthConfig {
+  if (over.rawAuthenticator) {
+    return { prefix: PREFIX, ...over };
+  }
   return {
     prefix: PREFIX,
     lookup: async (h) => (h === HASH ? record() : null),
@@ -513,5 +519,44 @@ describe('createApiKeyAuth — rawAuthenticator unavailable (infra unreachable, 
     );
     expect(out.nextCalled).toBe(false);
     expect(out.status).toBe(503);
+  });
+});
+
+describe('createApiKeyAuth — config validation (PKG-149 Finding 2)', () => {
+  it('supplying BOTH lookup and rawAuthenticator does NOT throw — constructs fine, rawAuthenticator wins, and warns once (reversed: lookup used to be REQUIRED, so cairn/smarthome/sano-os all carry a dead lookup today)', async () => {
+    const warn = vi.fn();
+    const lookup = vi.fn(async () => { throw new Error('legacy lookup must not run'); });
+    let mw: ReturnType<typeof createApiKeyAuth>;
+    expect(() => {
+      mw = createApiKeyAuth({
+        prefix: PREFIX,
+        lookup,
+        rawAuthenticator: async () => ({ ok: true, record: record({ id: 'raw-authenticator-record' }) }),
+        logger: { warn },
+      });
+    }).not.toThrow();
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toMatch(/rawAuthenticator.*lookup.*deprecated/is);
+
+    const out = await invoke(mw!, makeReq(bearer(RAW)));
+    expect(out.nextCalled).toBe(true);
+    expect(lookup).not.toHaveBeenCalled();
+    // Still only warned once — construction, not every request.
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('supplying NEITHER lookup nor rawAuthenticator throws synchronously at construction, with a clear message', () => {
+    expect(() => createApiKeyAuth({ prefix: PREFIX } as ApiKeyAuthConfig)).toThrow(
+      /rawAuthenticator.*lookup/,
+    );
+  });
+
+  it('a canonical config (rawAuthenticator only, no lookup) constructs and runs fine', async () => {
+    const mw = createApiKeyAuth({
+      prefix: PREFIX,
+      rawAuthenticator: async () => ({ ok: true, record: record() }),
+    });
+    const out = await invoke(mw, makeReq(bearer(RAW)));
+    expect(out.nextCalled).toBe(true);
   });
 });

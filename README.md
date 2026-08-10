@@ -332,14 +332,36 @@ throws.
 
 `createApiKeyAuth(config)` verifies a presented key and populates
 `req.securityContext`. The kit owns the verification machinery; your service owns
-persistence (`lookup`), policy (`onAuthenticated`, `requireScope`), and audit
-(`onFailure`).
+persistence (`rawAuthenticator` or `lookup`), policy (`onAuthenticated`,
+`requireScope`), and audit (`onFailure`).
+
+Config takes one of two credential paths. Supplying NEITHER throws
+synchronously at construction (a clear config-error message, not a 401 on
+every request) — that shape cannot authenticate under any path:
+
+- **`rawAuthenticator`, canonical (recommended).** Your callback owns lookup
+  and hash comparison entirely; the kit never touches the raw key. Use
+  `createCanonicalRawAuthenticator` (below) for the kit's own generic
+  implementation, or supply your own (e.g. backed by
+  `@andrewpopov/api-access-kit`). `lookup` is OPTIONAL when `rawAuthenticator`
+  is supplied — you no longer need a dead callback just to satisfy the type.
+- **`lookup` + `hasher`, legacy.** The kit hashes the WHOLE presented
+  credential and looks up a record by that hash. Kept for existing consumers
+  with hashes already stored this way — new integrations should use
+  `rawAuthenticator` instead (a hash of the whole credential can't support an
+  indexed lookup by public id; see `createCanonicalRawAuthenticator` below).
+
+Supplying BOTH is allowed but deprecated: `rawAuthenticator` wins, `lookup` is
+silently ignored (unchanged behavior), and a one-time warning is logged via
+`config.logger` telling you to remove the now-unnecessary `lookup`. This will
+become a construction-time error in a future major version — if your config
+predates `lookup` becoming optional, drop it now rather than waiting.
 
 Pipeline: extract key (Bearer or custom header) → prefix check → constant-time
-static bootstrap keys → hash + `lookup` → re-verify stored hash (defense in
-depth) → expiry → IP allowlist → build context. It **fails closed**: every
-failure returns a **generic** response and never proceeds. Two distinct
-failure modes:
+static bootstrap keys → `rawAuthenticator` OR hash + `lookup` → (legacy only)
+re-verify stored hash (defense in depth) → expiry → IP allowlist → build
+context. It **fails closed**: every failure returns a **generic** response and
+never proceeds. Two distinct failure modes:
 
 - **Authentication failure** (missing/malformed/bad-prefix/not-found/
   hash-mismatch/expired/ip-denied key) → generic `401`/`403`
@@ -460,24 +482,40 @@ keep your own (Prisma, raw SQL, ...):
 ```ts
 import {
   generateApiKey,
-  parseApiKey,
   maskApiKey,
   rotateApiKey,
   createThrottledTouchLastUsed,
+  createApiKeyAuth,
+  createCanonicalRawAuthenticator,
   type ApiKeyStore,
 } from '@andrewpopov/express-security-kit';
 
 // Mint. `raw` is shown to the caller ONCE — the kit never stores it.
 const material = generateApiKey({ prefix: 'app_' });
 // material: { raw: 'app_<keyId>.<secret>', hash, keyId, prefix, last4 }
+// `hash` is the hash of the SECRET SEGMENT ONLY — store it alongside the
+// PUBLIC keyId, indexed on keyId (never on hash: you look up by keyId, then
+// verify the hash, not the other way around).
 await db.apiKey.create({ keyId: material.keyId, hash: material.hash });
 return { key: material.raw }; // show once
 
-// Verify (in your `lookup`): parse, look up by the PUBLIC keyId (indexed,
-// no table scan needed), then let verifyApiKey/createApiKeyAuth do the
-// constant-time hash compare against the stored hash of the secret.
-const parsed = parseApiKey(presentedKey, 'app_');
-const record = parsed && (await db.apiKey.findByKeyId(parsed.keyId));
+// Verify: wire `createCanonicalRawAuthenticator` in as `rawAuthenticator`. It
+// parses the presented `<prefix><keyId>.<secret>` credential, looks the
+// record up by the PUBLIC keyId (indexed, never a table scan), and
+// constant-time compares the stored hash against hasher(secret) — exactly
+// what generateApiKey above stored. No `lookup` needed; `lookup` receives
+// only a computed hash, never the raw key, so it has nothing to parse a
+// keyId out of — this IS the adapter that recipe actually requires.
+app.use(
+  '/api',
+  createApiKeyAuth({
+    prefix: 'app_',
+    rawAuthenticator: createCanonicalRawAuthenticator({
+      prefix: 'app_',
+      findByKeyId: (keyId) => db.apiKey.findByKeyId(keyId),
+    }),
+  }),
+);
 
 // Display/log: never the secret.
 maskApiKey(material); // 'app_<keyId>...<last4>'
@@ -545,12 +583,47 @@ so you can read fields your `lookup` stashed (including `record.meta`).
 
 ### Canonical credential adapters
 
-Credential issuance, wire formats, indexed public-id lookup, and pepper
-rotation belong to `@andrewpopov/api-access-kit`. Configure `rawAuthenticator`
-when using that contract: it receives the presented raw credential and returns
-an authenticated record. This kit then applies HTTP concerns (header parsing,
+`rawAuthenticator` receives the presented raw credential and returns an
+authenticated record; this kit then applies HTTP concerns (header parsing,
 expiry/IP policy, and `SecurityContext`) without hashing the full credential or
-assuming a persistence layout. `lookup` and `hasher` remain for legacy stores.
+assuming a persistence layout. `lookup` and `hasher` remain for legacy stores
+(see the config table above — a config carrying both a `rawAuthenticator` and
+a leftover `lookup` still works, `rawAuthenticator` wins, but it's deprecated
+and logs a one-time warning; delete the unused `lookup`).
+
+**`createCanonicalRawAuthenticator` — the kit's own generic canonical
+adapter.** Give it a `prefix` and a `findByKeyId` lookup and it does the rest:
+parse `<prefix><keyId>.<secret>`, look up by the PUBLIC keyId (indexed, never
+a table scan), and constant-time compare the stored hash against
+`hasher(secret)` — the hash of the SECRET SEGMENT alone, exactly what
+`generateApiKey` stores. This is a plain host adapter with **no runtime
+dependency on any other package** — wire it to whatever store you like,
+including one backed by `@andrewpopov/api-access-kit` if you already use that
+package for issuance/pepper rotation:
+
+```ts
+import { createApiKeyAuth, createCanonicalRawAuthenticator } from '@andrewpopov/express-security-kit';
+
+app.use(
+  '/api',
+  createApiKeyAuth({
+    prefix: 'app_',
+    rawAuthenticator: createCanonicalRawAuthenticator({
+      prefix: 'app_',
+      findByKeyId: (keyId) => db.apiKey.findByKeyId(keyId), // -> { id, hash, ... } | null
+      // hasher?: KeyHasher — defaults to sha256Hasher(), matching generateApiKey's default.
+      // Pass the SAME hasher (and options, e.g. an HMAC scope) generateApiKey used.
+    }),
+  }),
+);
+```
+
+`findByKeyId` throwing is treated as `reason: 'unavailable'` (a store/infra
+failure), never as `not_found` or a 401 — see below.
+
+**Writing your own adapter** (e.g. one owned entirely by
+`@andrewpopov/api-access-kit`, or any other host-owned credential scheme) is
+just a function of the same shape — `RawApiKeyAuthenticator`:
 
 **Reporting infrastructure unavailability.** If the authenticator's own
 backing infrastructure — a key store, a pepper ring, unloaded config — can't be

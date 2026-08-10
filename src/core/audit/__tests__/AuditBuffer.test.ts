@@ -61,6 +61,15 @@ describe('AuditBuffer.record non-blocking', () => {
   });
 });
 
+describe('AuditBufferConfig has no injectable clock', () => {
+  it('AuditBuffer never reads any time-dependent state off its own config (no `now` option — PKG-149 Finding 3: it was accepted but never consumed, so it is removed rather than wired up)', () => {
+    const { sink } = recordingSink();
+    // @ts-expect-error `now` is not part of AuditBufferConfig — pins the removal.
+    const buf = new AuditBuffer({ sink, now: () => 123, ...noTimer });
+    buf.stop();
+  });
+});
+
 describe('AuditBuffer constructor validation', () => {
   it('throws on non-positive maxBufferSize', () => {
     const { sink } = recordingSink();

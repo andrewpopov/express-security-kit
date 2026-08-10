@@ -39,7 +39,14 @@ export interface RequestSigningVerifierConfig {
   headerNames?: Partial<SigningHeaderNames>;
   /** Nonce format. Default /^[A-Za-z0-9:_-]{8,128}$/. */
   nonceFormat?: RegExp;
-  /** Replay-protection store (required). */
+  /**
+   * Replay-protection store (required). Read FRESH on every request (via an
+   * accessor passed to the core), not captured once at construction — so
+   * replacing `config.nonceStore` after this middleware is built (store
+   * rotation/recovery) takes effect on the very next request, matching the
+   * pre-carve middleware's behaviour. Mutate this property on the SAME
+   * config object passed in here for the late binding to be observed.
+   */
   nonceStore: NonceStore;
   /**
    * Replay scope key. Default: `ctx.keyId ?? ctx.principalId ?? 'global'`.
@@ -144,7 +151,12 @@ export function createRequestSigningVerifier(
   const core = createRequestSignatureVerifierCore({
     maxSkewSeconds: config.maxSkewSeconds,
     nonceFormat: config.nonceFormat,
-    nonceStore: config.nonceStore,
+    // An accessor, not `config.nonceStore` directly, so a host that replaces
+    // `config.nonceStore` on its own config object AFTER constructing this
+    // middleware (store rotation/recovery) takes effect on the very next
+    // request — the pre-carve middleware read `config.nonceStore` fresh on
+    // every call, and this preserves that observable behaviour at zero cost.
+    nonceStore: () => config.nonceStore,
     requireRawBody: config.requireRawBody,
     now: config.now,
     logger: config.logger,
@@ -191,23 +203,26 @@ export function createRequestSigningVerifier(
     try {
       const ctx = req.securityContext;
 
-      // Resolve the secret. Unresolved (undefined/empty) → the core fails
-      // closed with `no_secret`.
-      const secret =
-        typeof config.secret === 'function'
-          ? await config.secret(req, ctx)
-          : config.secret;
-
+      // `secret`, `body`, `nonceScope`, and `hasRawBody` are passed as
+      // zero-argument closures over this request, NOT pre-computed here —
+      // the core calls each at the exact point the pre-carve middleware did
+      // (see the ordering doc on `RequestSignatureVerifyInput`). Evaluating
+      // any of them eagerly, up front, would run a host's `bodySource` /
+      // `nonceScope` (and their side effects, or a throw) for requests that
+      // fail an earlier check and were never going to reach that point.
       const input: RequestSignatureVerifyInput = {
         method: req.method,
         url: req.originalUrl,
         timestampHeader: headerValue(req, headerNames.timestamp),
         nonceHeader: headerValue(req, headerNames.nonce),
         signatureHeader: headerValue(req, headerNames.signature),
-        body: bodySource(req),
-        secret,
-        nonceScope: nonceScope(req, ctx),
-        hasRawBody: hasRawBody(req),
+        body: () => bodySource(req),
+        secret: () =>
+          typeof config.secret === 'function'
+            ? config.secret(req, ctx)
+            : config.secret,
+        nonceScope: () => nonceScope(req, ctx),
+        hasRawBody: () => hasRawBody(req),
       };
 
       const outcome = await core.verify(input);
@@ -217,8 +232,11 @@ export function createRequestSigningVerifier(
 
       return next();
     } catch (err) {
-      // FAIL CLOSED on any unexpected error (including a throwing secret
-      // resolver, which the core never sees).
+      // FAIL CLOSED on any unexpected error. A throwing secret resolver is
+      // normally caught INSIDE core.verify() (it calls input.secret()) and
+      // surfaces as outcome.reason === 'error' above; this catch is the
+      // backstop for anything that can throw before core.verify() is even
+      // reached (e.g. reading req.securityContext).
       logger.warn('[express-security-kit] signing verifier error', err);
       return fail(req, res, 'error');
     }

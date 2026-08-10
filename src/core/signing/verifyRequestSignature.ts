@@ -47,8 +47,17 @@ export interface RequestSignatureVerifierConfigCore {
   maxSkewSeconds?: number;
   /** Nonce format. Default /^[A-Za-z0-9:_-]{8,128}$/. */
   nonceFormat?: RegExp;
-  /** Replay-protection store (required). */
-  nonceStore: NonceStore;
+  /**
+   * Replay-protection store (required), or a zero-argument accessor that
+   * returns it. Resolved FRESH on every `verify()` call rather than once at
+   * construction: the pre-carve middleware read `config.nonceStore` off the
+   * host's config object on every request, so a host that rotated/replaced
+   * the store after building the middleware (store recovery, credential
+   * rotation) saw the new store take effect immediately. Accepting a plain
+   * `NonceStore` still works (and is captured once, same as before) — only a
+   * caller that wants late binding needs to pass the accessor form.
+   */
+  nonceStore: NonceStore | (() => NonceStore);
   /**
    * When true, FAIL CLOSED (reason `'no_raw_body'`) whenever the caller
    * reports `input.hasRawBody: false`. What "has raw body" means for a given
@@ -68,8 +77,19 @@ export interface RequestSignatureVerifierConfigCore {
  * Plain facts the core needs to verify one request's signature. Every
  * framework-specific extraction — reading headers, resolving the body
  * source, resolving the secret, deriving the nonce scope — is the CALLER's
- * job; this carries only already-resolved values, never a framework request
- * object.
+ * job; this carries only already-resolved values (or zero-argument
+ * accessors for them), never a framework request object.
+ *
+ * `secret`, `body`, `nonceScope`, and `hasRawBody` are zero-argument
+ * functions rather than pre-computed values ON PURPOSE: the pre-carve
+ * middleware evaluated each of these LAZILY, at a specific point in its
+ * control flow, so that a request failing an earlier check never triggered a
+ * later one's side effects (e.g. an unresolved secret short-circuited before
+ * a custom `bodySource` or `nonceScope` ever ran). `verify()` calls each
+ * accessor at the exact point the original code evaluated it — see the
+ * ordering comments inline below. `timestampHeader` / `nonceHeader` /
+ * `signatureHeader`, `method`, and `url` stay eager: reading a header has no
+ * side effects, so there is nothing to defer.
  */
 export interface RequestSignatureVerifyInput {
   /** HTTP method (case-insensitive; upper-cased for the canonical string). */
@@ -82,23 +102,34 @@ export interface RequestSignatureVerifyInput {
   nonceHeader: string | undefined;
   /** Raw signature header value, if present. */
   signatureHeader: string | undefined;
-  /** Exact bytes to hash into the canonical string. Ignored for GET/HEAD. */
-  body: string;
   /**
-   * Resolved HMAC secret (per-key or global). Undefined/empty → fail closed
-   * (`no_secret`).
+   * Exact bytes to hash into the canonical string. Ignored for GET/HEAD.
+   * Called ONLY after the `requireRawBody` precondition passes — a
+   * `bodySource` with side effects (or one that can throw, e.g. on a
+   * circular object) must never run for a request that was going to be
+   * rejected anyway.
    */
-  secret: string | undefined;
+  body: () => string;
   /**
-   * Replay-protection scope key, so one principal's nonces never collide with
-   * another's.
+   * Resolves the HMAC secret (per-key or global). Undefined/empty → fail
+   * closed (`no_secret`). Called FIRST, before any other check — matching
+   * the original middleware, which resolved the secret before touching the
+   * timestamp/nonce/signature headers.
    */
-  nonceScope: string;
+  secret: () => string | undefined | Promise<string | undefined>;
+  /**
+   * Replay-protection scope key, so one principal's nonces never collide
+   * with another's. Called ONLY after the HMAC comparison succeeds — a
+   * throwing `nonceScope` must never turn an already-malformed request's
+   * specific failure reason into a generic `error`, and it must never run
+   * for a request whose signature doesn't check out.
+   */
+  nonceScope: () => string;
   /**
    * Whether the `requireRawBody` precondition is satisfied for this request.
-   * Only consulted when `config.requireRawBody` is true.
+   * Only consulted (and only called) when `config.requireRawBody` is true.
    */
-  hasRawBody: boolean;
+  hasRawBody: () => boolean;
 }
 
 export type RequestSignatureVerifyOutcome =
@@ -150,13 +181,23 @@ export function createRequestSignatureVerifierCore(
   const requireRawBody = config.requireRawBody ?? false;
   const clock = config.now ?? Date.now;
 
+  // Resolved fresh on every call (not hoisted out of `verify`) so a
+  // `() => NonceStore` accessor sees whatever the caller's config currently
+  // points at — see the late-binding note on `RequestSignatureVerifierConfigCore.nonceStore`.
+  function resolveNonceStore(): NonceStore {
+    return typeof config.nonceStore === 'function'
+      ? config.nonceStore()
+      : config.nonceStore;
+  }
+
   async function verify(
     input: RequestSignatureVerifyInput,
   ): Promise<RequestSignatureVerifyOutcome> {
     try {
-      // 1. Secret must already be resolved. Unresolved (undefined/empty) →
-      //    fail closed.
-      if (!input.secret) {
+      // 1. Secret resolved FIRST, before any other check — matching the
+      //    original middleware. Unresolved (undefined/empty) → fail closed.
+      const secret = await input.secret();
+      if (!secret) {
         return { type: 'fail', reason: 'no_secret' };
       }
 
@@ -185,34 +226,47 @@ export function createRequestSignatureVerifierCore(
       }
       const presented = signatureRaw.toLowerCase();
 
-      // 4b. requireRawBody: the caller has already resolved what "has raw
-      //     body" means for THIS request (bodyless-method exemption, custom
-      //     extractor passthrough); the core only enforces the policy.
-      if (requireRawBody && !input.hasRawBody) {
+      // 4b. requireRawBody: the caller resolves what "has raw body" means for
+      //     THIS request (bodyless-method exemption, custom extractor
+      //     passthrough); the core only enforces the policy. `hasRawBody()`
+      //     is pure (no side effects) but stays lazy — called only after
+      //     every earlier check passes — to keep it, and `body()` right
+      //     after it, in the same relative position the original code
+      //     evaluated the equivalent checks.
+      if (requireRawBody && !input.hasRawBody()) {
         return { type: 'fail', reason: 'no_raw_body' };
       }
 
-      // 5. Recompute the expected signature and timing-safe compare.
+      // 5. Body resolved now — only after requireRawBody has passed — then
+      //    recompute the expected signature and timing-safe compare. A
+      //    `bodySource` with side effects (or one that throws, e.g. on a
+      //    circular object) must never run for a request that was always
+      //    going to be rejected on an earlier check.
       const canonical = buildCanonicalString({
         method: input.method,
         url: input.url,
         timestampMs,
         nonce,
-        body: input.body,
+        body: input.body(),
       });
-      const expected = createHmac('sha256', input.secret).update(canonical).digest('hex');
+      const expected = createHmac('sha256', secret).update(canonical).digest('hex');
       if (!timingSafeEqualHex(presented, expected)) {
         return { type: 'fail', reason: 'signature' };
       }
 
-      // 6. Replay protection: consume the nonce ONLY now that the signature
-      //    is proven valid. Store unavailable (throw) → FAIL CLOSED.
+      // 6. Replay protection: nonceScope is resolved, and the nonce
+      //    consumed, ONLY now that the signature is proven valid — a
+      //    throwing `nonceScope` must never run against a malformed/forged
+      //    request, and it must never turn a request's specific failure
+      //    reason into a generic `error`. Store unavailable (throw) → FAIL
+      //    CLOSED.
+      const scope = input.nonceScope();
       // Typed as unknown on purpose: a custom store might violate the
       // contract and return something other than 'ok' | 'replay'; we defend
       // against that.
       let consumeResult: unknown;
       try {
-        consumeResult = await config.nonceStore.consume(input.nonceScope, nonce, maxSkewMs);
+        consumeResult = await resolveNonceStore().consume(scope, nonce, maxSkewMs);
       } catch (err) {
         safeWarn(config, '[express-security-kit] nonce store unavailable', err);
         return { type: 'fail', reason: 'store_error' };

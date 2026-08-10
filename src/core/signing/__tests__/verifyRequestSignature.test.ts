@@ -62,10 +62,10 @@ function makeInput(
     timestampHeader: headers['X-Timestamp'],
     nonceHeader: headers['X-Nonce'],
     signatureHeader: over.tamperSignature ?? headers['X-Signature'],
-    body,
-    secret,
-    nonceScope: over.nonceScope ?? 'global',
-    hasRawBody: over.hasRawBody ?? true,
+    body: () => body,
+    secret: () => secret,
+    nonceScope: () => over.nonceScope ?? 'global',
+    hasRawBody: () => over.hasRawBody ?? true,
   };
 }
 
@@ -93,7 +93,7 @@ describe('createRequestSignatureVerifierCore — failure reasons', () => {
   it('no_secret: an unresolved (undefined) secret fails closed', async () => {
     const core = createRequestSignatureVerifierCore(baseConfig());
     const input = makeInput();
-    input.secret = undefined;
+    input.secret = () => undefined;
     expect(await core.verify(input)).toEqual({ type: 'fail', reason: 'no_secret' });
   });
 
@@ -255,5 +255,151 @@ describe('createRequestSignatureVerifierCore — fail-closed on unexpected error
     input.method = 'POST\n';
     expect(await core.verify(input)).toEqual({ type: 'fail', reason: 'error' });
     expect(warn).toHaveBeenCalled();
+  });
+});
+
+// PKG-151 follow-up (Codex review): `secret`, `body`, `nonceScope`, and
+// `hasRawBody` are zero-argument accessors precisely so `verify()` can defer
+// calling them until the exact point the pre-carve middleware evaluated the
+// equivalent code — never for a request that fails an earlier check. These
+// tests pin that ordering with call-count/call-order assertions so a future
+// change back to eager evaluation (e.g. destructuring all four up front)
+// fails loudly instead of only showing up as a subtle behavior change.
+describe('createRequestSignatureVerifierCore — lazy evaluation ordering', () => {
+  function spiedInput(over: Parameters<typeof makeInput>[0] = {}) {
+    const base = makeInput(over);
+    const calls: string[] = [];
+    const secretFn = vi.fn(() => {
+      calls.push('secret');
+      return base.secret();
+    });
+    const bodyFn = vi.fn(() => {
+      calls.push('body');
+      return base.body();
+    });
+    const nonceScopeFn = vi.fn(() => {
+      calls.push('nonceScope');
+      return base.nonceScope();
+    });
+    const hasRawBodyFn = vi.fn(() => {
+      calls.push('hasRawBody');
+      return base.hasRawBody();
+    });
+    const input: RequestSignatureVerifyInput = {
+      ...base,
+      secret: secretFn,
+      body: bodyFn,
+      nonceScope: nonceScopeFn,
+      hasRawBody: hasRawBodyFn,
+    };
+    return { input, calls, secretFn, bodyFn, nonceScopeFn, hasRawBodyFn };
+  }
+
+  it('no_secret: body, nonceScope, hasRawBody, and the nonce store are never touched', async () => {
+    const store = makeStore({ now: () => NOW });
+    const consumeSpy = vi.spyOn(store, 'consume');
+    const core = createRequestSignatureVerifierCore(baseConfig({ nonceStore: store }));
+    const { input, secretFn, bodyFn, nonceScopeFn, hasRawBodyFn } = spiedInput();
+    secretFn.mockImplementation(() => undefined);
+    expect(await core.verify(input)).toEqual({ type: 'fail', reason: 'no_secret' });
+    expect(secretFn).toHaveBeenCalledTimes(1);
+    expect(bodyFn).not.toHaveBeenCalled();
+    expect(nonceScopeFn).not.toHaveBeenCalled();
+    expect(hasRawBodyFn).not.toHaveBeenCalled();
+    expect(consumeSpy).not.toHaveBeenCalled();
+  });
+
+  it('bad timestamp: body and nonceScope never invoked', async () => {
+    const core = createRequestSignatureVerifierCore(baseConfig());
+    const { input, bodyFn, nonceScopeFn } = spiedInput();
+    input.timestampHeader = undefined;
+    expect(await core.verify(input)).toEqual({ type: 'fail', reason: 'timestamp' });
+    expect(bodyFn).not.toHaveBeenCalled();
+    expect(nonceScopeFn).not.toHaveBeenCalled();
+  });
+
+  it('bad skew: body and nonceScope never invoked', async () => {
+    const core = createRequestSignatureVerifierCore(baseConfig());
+    const { input, bodyFn, nonceScopeFn } = spiedInput({ timestampMs: NOW - 600_000 });
+    expect(await core.verify(input)).toEqual({ type: 'fail', reason: 'skew' });
+    expect(bodyFn).not.toHaveBeenCalled();
+    expect(nonceScopeFn).not.toHaveBeenCalled();
+  });
+
+  it('malformed nonce: body and nonceScope never invoked', async () => {
+    const core = createRequestSignatureVerifierCore(baseConfig());
+    const { input, bodyFn, nonceScopeFn } = spiedInput({ nonce: 'short' });
+    expect(await core.verify(input)).toEqual({ type: 'fail', reason: 'nonce' });
+    expect(bodyFn).not.toHaveBeenCalled();
+    expect(nonceScopeFn).not.toHaveBeenCalled();
+  });
+
+  it('malformed signature (not 64-hex): body and nonceScope never invoked', async () => {
+    const core = createRequestSignatureVerifierCore(baseConfig());
+    const { input, bodyFn, nonceScopeFn } = spiedInput({ tamperSignature: 'xyz' });
+    expect(await core.verify(input)).toEqual({ type: 'fail', reason: 'signature' });
+    expect(bodyFn).not.toHaveBeenCalled();
+    expect(nonceScopeFn).not.toHaveBeenCalled();
+  });
+
+  it('requireRawBody failure: body never invoked', async () => {
+    const core = createRequestSignatureVerifierCore(baseConfig({ requireRawBody: true }));
+    const { input, bodyFn, hasRawBodyFn, nonceScopeFn } = spiedInput({ hasRawBody: false });
+    expect(await core.verify(input)).toEqual({ type: 'fail', reason: 'no_raw_body' });
+    expect(hasRawBodyFn).toHaveBeenCalledTimes(1);
+    expect(bodyFn).not.toHaveBeenCalled();
+    expect(nonceScopeFn).not.toHaveBeenCalled();
+  });
+
+  it('signature mismatch: nonceScope never invoked and the store never consumes', async () => {
+    const store = makeStore({ now: () => NOW });
+    const consumeSpy = vi.spyOn(store, 'consume');
+    const core = createRequestSignatureVerifierCore(baseConfig({ nonceStore: store }));
+    const { input, bodyFn, nonceScopeFn } = spiedInput({ tamperSignature: 'f'.repeat(64) });
+    expect(await core.verify(input)).toEqual({ type: 'fail', reason: 'signature' });
+    // body() IS needed here — the canonical string (and thus the expected
+    // HMAC) can't be computed without it — but nonceScope/consume must not
+    // run for a request whose signature doesn't check out.
+    expect(bodyFn).toHaveBeenCalledTimes(1);
+    expect(nonceScopeFn).not.toHaveBeenCalled();
+    expect(consumeSpy).not.toHaveBeenCalled();
+  });
+
+  it('success: secret, hasRawBody, body, nonceScope, and store.consume each invoked exactly once, in the documented order', async () => {
+    const store = makeStore({ now: () => NOW });
+    const { input, calls, secretFn, hasRawBodyFn, bodyFn, nonceScopeFn } = spiedInput({
+      hasRawBody: true,
+    });
+    // Reuse the SAME `calls` array `spiedInput` already records
+    // secret/hasRawBody/body/nonceScope into, so `consume`'s position lands
+    // relative to them.
+    const originalConsume = store.consume.bind(store);
+    const consumeSpy = vi
+      .spyOn(store, 'consume')
+      .mockImplementation((...args: Parameters<NonceStore['consume']>) => {
+        calls.push('consume');
+        return originalConsume(...args);
+      });
+    const core = createRequestSignatureVerifierCore(
+      baseConfig({ nonceStore: store, requireRawBody: true }),
+    );
+
+    expect(await core.verify(input)).toEqual({ type: 'ok' });
+    expect(secretFn).toHaveBeenCalledTimes(1);
+    expect(hasRawBodyFn).toHaveBeenCalledTimes(1);
+    expect(bodyFn).toHaveBeenCalledTimes(1);
+    expect(nonceScopeFn).toHaveBeenCalledTimes(1);
+    expect(consumeSpy).toHaveBeenCalledTimes(1);
+    expect(calls).toEqual(['secret', 'hasRawBody', 'body', 'nonceScope', 'consume']);
+  });
+
+  it('a throwing nonceScope on an otherwise-malformed request still yields the malformed reason, not error', async () => {
+    const core = createRequestSignatureVerifierCore(baseConfig());
+    const { input, nonceScopeFn } = spiedInput({ nonce: 'short' });
+    nonceScopeFn.mockImplementation(() => {
+      throw new Error('nonceScope must not run for a malformed request');
+    });
+    expect(await core.verify(input)).toEqual({ type: 'fail', reason: 'nonce' });
+    expect(nonceScopeFn).not.toHaveBeenCalled();
   });
 });

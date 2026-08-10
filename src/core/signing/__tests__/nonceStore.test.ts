@@ -43,6 +43,20 @@ describe('MemoryNonceStore', () => {
     expect(await store.consume('s', 'a', 5000)).toBe('replay');
   });
 
+  it('THROWS at capacity and does NOT let the store grow past maxTrackedNonces', async () => {
+    const store = makeStore({ maxTrackedNonces: 2, now: () => 1000 });
+    await store.consume('s', 'a', 5000); // live until 6000
+    await store.consume('s', 'b', 5000); // live until 6000
+    expect(store.size).toBe(2);
+    // 'c' would push over cap; all existing are live → must throw AND must
+    // NOT be recorded — the store must not grow past its cap.
+    await expect(store.consume('s', 'c', 5000)).rejects.toThrow(/capacity exceeded/);
+    expect(store.size).toBe(2);
+    // A second rejected attempt must not grow it further either.
+    await expect(store.consume('s', 'd', 5000)).rejects.toThrow(/capacity exceeded/);
+    expect(store.size).toBe(2);
+  });
+
   it('prunes EXPIRED entries to free capacity for new nonces', async () => {
     let now = 1000;
     const store = makeStore({ maxTrackedNonces: 2, now: () => now });
@@ -57,6 +71,18 @@ describe('MemoryNonceStore', () => {
   it('constructor throws on maxTrackedNonces <= 0', () => {
     expect(() => new MemoryNonceStore({ maxTrackedNonces: 0 })).toThrow();
     expect(() => new MemoryNonceStore({ maxTrackedNonces: -5 })).toThrow();
+  });
+
+  it('constructor throws on a fractional maxTrackedNonces', () => {
+    // A fractional cap is rejected rather than silently rounded: the
+    // reservation check admits ceil(cap) entries, so `2.5` would hold 3 —
+    // more than the configured value reads as allowing.
+    expect(() => new MemoryNonceStore({ maxTrackedNonces: 2.5 })).toThrow(
+      /positive integer/,
+    );
+    expect(() => new MemoryNonceStore({ maxTrackedNonces: Infinity })).toThrow(
+      /positive integer/,
+    );
   });
 
   it('stop() is idempotent', () => {

@@ -48,13 +48,16 @@ export declare class MemoryNonceStore implements NonceStore {
     private storageKey;
     consume(scope: string, nonce: string, ttlMs: number): Promise<'ok' | 'replay'>;
     /**
-     * Keep the store within its cap WITHOUT ever evicting a live nonce (evicting a
-     * within-TTL nonce would let its request be replayed). First prune everything
-     * that has expired; if the store is STILL over capacity, every remaining entry
-     * is live — so we THROW rather than evict. The verifier maps a store throw to
-     * `store_error` → 401, i.e. it fails CLOSED.
+     * Ensure there is room for one more entry WITHOUT ever evicting a live nonce
+     * (evicting a within-TTL nonce would let its request be replayed). Only when
+     * the store is already at/over its cap do we prune everything that has
+     * expired; if it is STILL at/over cap afterward, every remaining entry is
+     * live — so we THROW rather than evict. Called BEFORE the new entry is
+     * inserted, so a rejected nonce never grows the store past `maxTrackedNonces`.
+     * The verifier maps a store throw to `store_error` → 401, i.e. it fails
+     * CLOSED.
      */
-    private enforceCapacity;
+    private reserveCapacity;
     private cleanup;
     /** Alias of dispose() for ergonomic test teardown. */
     stop(): void;

@@ -94,6 +94,7 @@ export function buildDefaultContext(record: ApiKeyRecord): SecurityContext {
     keyId: record.id,
     scopes: record.scopes,
     rateLimitOverride: record.rateLimitOverride ?? undefined,
+    hmacSecret: record.hmacSecret ?? undefined,
   };
   if (record.meta !== undefined) context.meta = record.meta;
   return context;

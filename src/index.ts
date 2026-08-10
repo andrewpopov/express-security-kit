@@ -117,6 +117,19 @@ export type {
 
 export { normalizeIp } from './core/api-key/normalizeIp';
 
+// createCanonicalRawAuthenticator: pinned to `Request`, same reasoning as
+// verifyApiKey/createApiKeyAuth above — it returns a RawApiKeyAuthenticator<Req>.
+import { createCanonicalRawAuthenticator as createCanonicalRawAuthenticatorCore } from './core/api-key/canonicalAuthenticator';
+import type { CreateCanonicalRawAuthenticatorOptions } from './core/api-key/canonicalAuthenticator';
+import type { RawApiKeyAuthenticator } from './core/api-key/types';
+export type {
+  CanonicalApiKeyRecord,
+  CreateCanonicalRawAuthenticatorOptions,
+} from './core/api-key/canonicalAuthenticator';
+export const createCanonicalRawAuthenticator: (
+  options: CreateCanonicalRawAuthenticatorOptions,
+) => RawApiKeyAuthenticator<Request> = createCanonicalRawAuthenticatorCore;
+
 // API-key ISSUANCE (mint/parse/mask/rotate). Framework-agnostic — no Request
 // pinning needed, unlike verifyApiKey/createApiKeyAuth above.
 export {

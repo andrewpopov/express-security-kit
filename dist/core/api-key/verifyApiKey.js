@@ -2,6 +2,8 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.extractRawKey = extractRawKey;
 exports.buildDefaultContext = buildDefaultContext;
+exports.describeApiKeyConfigError = describeApiKeyConfigError;
+exports.warnIfBothCredentialPathsConfigured = warnIfBothCredentialPathsConfigured;
 exports.verifyApiKey = verifyApiKey;
 const hashers_1 = require("./hashers");
 const normalizeIp_1 = require("./normalizeIp");
@@ -66,6 +68,80 @@ function resolveErrorStatus(config) {
     }
 }
 /**
+ * `ApiKeyAuthConfigCore` needs at least one of `rawAuthenticator` (canonical)
+ * or `lookup` (legacy) — supplying NEITHER can't work under any code path, so
+ * it is rejected: {@link createApiKeyAuth} (Express and Fastify) calls this
+ * eagerly at construction and throws with this message; {@link verifyApiKey}
+ * calls it per-request and — consistent with its documented never-throws
+ * contract — folds an invalid config into the existing `reason: 'error'`
+ * vocabulary instead of throwing. (Before this check existed, "neither"
+ * already produced the same `reason: 'error'`/503 outcome via an uncaught
+ * `TypeError` from calling `undefined` as `lookup`, swallowed by
+ * `verifyApiKey`'s fail-closed catch-all — this makes that failure explicit
+ * and, for `createApiKeyAuth`, immediate at construction instead of on the
+ * first request.)
+ *
+ * Supplying BOTH is deliberately NOT an error here — see {@link
+ * warnIfBothCredentialPathsConfigured}. `lookup` used to be REQUIRED, so
+ * every canonical-path consumer was forced to supply a dead `lookup` just to
+ * satisfy the type; rejecting "both" at construction would break every one of
+ * them on upgrade, punishing them for a workaround the old type forced on
+ * them. `rawAuthenticator` silently wins today, unchanged — the warning is
+ * how the "both" case gets deprecated without breaking anyone on this release.
+ *
+ * Returns `null` when the config is valid.
+ */
+function describeApiKeyConfigError(config) {
+    const hasRawAuthenticator = typeof config.rawAuthenticator === 'function';
+    const hasLookup = typeof config.lookup === 'function';
+    if (!hasRawAuthenticator && !hasLookup) {
+        return "supply either 'rawAuthenticator' (canonical) or 'lookup' (legacy)";
+    }
+    return null;
+}
+/** Default logger for {@link warnIfBothCredentialPathsConfigured} when
+ * `config.logger` is absent — same shape/behavior as the `consoleLogger`
+ * default in `createApiKeyAuth` (Express/Fastify). */
+const defaultAuthLogger = {
+    warn: (message, meta) => console.warn(message, meta ?? ''),
+};
+/**
+ * Configs that have already been warned about, so the deprecation notice
+ * fires ONCE per config object rather than once per request. A `WeakSet` so
+ * a long-lived config never leaks: once it's garbage collected, so is its
+ * entry. Module-level and shared by design — {@link createApiKeyAuth}
+ * (Express/Fastify) calls this at construction and {@link verifyApiKey} calls
+ * it per-request for direct callers that bypass `createApiKeyAuth`; whichever
+ * runs first against a given config object warns, the other is then a no-op.
+ */
+const warnedBothConfigured = new WeakSet();
+/**
+ * Warn, ONCE per config object, when both `rawAuthenticator` and `lookup`
+ * are configured. Behavior is unchanged (`rawAuthenticator` wins, `lookup` is
+ * silently ignored) — this is a deprecation notice, not an enforcement:
+ * supplying both will become a construction-time error in the next major
+ * version, so remove the now-unnecessary `lookup` ahead of that. Matches
+ * `AuditBuffer`'s `safeWarn` shape: a broken/throwing logger must NEVER break
+ * the caller, so the logger call is wrapped in try/catch.
+ */
+function warnIfBothCredentialPathsConfigured(config) {
+    if (typeof config.rawAuthenticator !== 'function' || typeof config.lookup !== 'function') {
+        return;
+    }
+    if (warnedBothConfigured.has(config))
+        return;
+    warnedBothConfigured.add(config);
+    try {
+        (config.logger ?? defaultAuthLogger).warn("[express-security-kit] ApiKeyAuthConfigCore: both 'rawAuthenticator' and 'lookup' are configured. " +
+            "'rawAuthenticator' wins and 'lookup' is ignored (unchanged behavior). This is DEPRECATED: remove " +
+            "the now-unnecessary 'lookup' — supplying both will become a construction-time error in the next " +
+            'major version.');
+    }
+    catch {
+        // A broken/throwing logger must never break auth.
+    }
+}
+/**
  * Verify an API key against the request, returning a discriminated outcome
  * WITHOUT sending HTTP or mutating the request. This is the shared verification
  * core (extract → prefix → static-key → hash+lookup → hash re-compare → expiry
@@ -73,16 +149,33 @@ function resolveErrorStatus(config) {
  * services that own their own response handling (e.g. a unified api-key-or-JWT
  * flow).
  *
- * NEVER throws: an unexpected error (e.g. a throwing `lookup` or `hasher`)
- * resolves to `{ ok: false, reason: 'error', present: true, status: 503 }`
- * (status configurable via `config.errorStatus`/`onError`) — fail closed,
- * but reported as an infrastructure failure, not a 401 authentication
- * failure.
- * It ignores the middleware-only config fields (`optional`, `onFailure`,
- * `logger`) and does NOT call `onFailure`; it DOES run `onAuthenticated`.
+ * NEVER throws: an unexpected error (e.g. a throwing `lookup` or `hasher`),
+ * or a config missing BOTH of `rawAuthenticator`/`lookup` (see {@link
+ * describeApiKeyConfigError}), resolves to `{ ok: false, reason: 'error',
+ * present: true, status: 503 }` (status configurable via
+ * `config.errorStatus`/`onError`) — fail closed, but reported as an
+ * infrastructure failure, not a 401 authentication failure. A config
+ * supplying BOTH does not error — `rawAuthenticator` wins, `lookup` is
+ * ignored, and a one-time deprecation warning is logged (see {@link
+ * warnIfBothCredentialPathsConfigured}).
+ * It ignores the middleware-only config fields (`optional`, `onFailure`) and
+ * does NOT call `onFailure`; it DOES run `onAuthenticated`, and it DOES use
+ * `logger` for the "both configured" deprecation warning above.
  */
 async function verifyApiKey(config, req) {
     try {
+        // 0. Config shape: at least one of rawAuthenticator/lookup must be set.
+        // createApiKeyAuth already rejected "neither" eagerly at construction (a
+        // thrown Error, so the message actually reaches the developer); reaching
+        // here means a caller invoked verifyApiKey directly with a bad config.
+        // Fail closed via the existing 'error' vocabulary rather than throwing —
+        // this function's contract is NEVER to throw.
+        if (describeApiKeyConfigError(config)) {
+            return failMissing('error', true, resolveErrorStatus(config));
+        }
+        // "Both configured" is not an error — deprecated, warned once, and
+        // rawAuthenticator wins below (step 4), unchanged from today's behavior.
+        warnIfBothCredentialPathsConfigured(config);
         // Resolve config-derived values inside the try so the never-throws
         // guarantee holds even against a pathological throwing config getter.
         const headerName = config.headerName ?? 'authorization';
@@ -129,8 +222,14 @@ async function verifyApiKey(config, req) {
             record = authenticated.record;
         }
         else {
+            // describeApiKeyConfigError already guaranteed lookup is set whenever
+            // rawAuthenticator isn't — narrow it explicitly for TS, since it can't
+            // infer that runtime invariant from a separately-called function.
+            const lookup = config.lookup;
+            if (!lookup)
+                return failMissing('error', true, resolveErrorStatus(config));
             const computedHash = hasher(rawKey);
-            record = await config.lookup(computedHash);
+            record = await lookup(computedHash);
             if (!record)
                 return failMissing('not_found', true);
             if (!record.hash || !(0, hashers_1.timingSafeEqualHex)(record.hash, computedHash)) {

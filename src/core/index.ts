@@ -11,7 +11,12 @@ export {
   scopedHmacHasher,
   timingSafeEqualHex,
 } from './api-key/hashers';
-export { verifyApiKey, extractRawKey, buildDefaultContext } from './api-key/verifyApiKey';
+export {
+  verifyApiKey,
+  extractRawKey,
+  buildDefaultContext,
+  describeApiKeyConfigError,
+} from './api-key/verifyApiKey';
 export type { ApiKeyVerifyOutcome } from './api-key/verifyApiKey';
 export type {
   ApiKeyRecord,
@@ -25,6 +30,12 @@ export type {
   ApiKeyErrorResponse,
 } from './api-key/types';
 export { normalizeIp } from './api-key/normalizeIp';
+
+export { createCanonicalRawAuthenticator } from './api-key/canonicalAuthenticator';
+export type {
+  CanonicalApiKeyRecord,
+  CreateCanonicalRawAuthenticatorOptions,
+} from './api-key/canonicalAuthenticator';
 
 export {
   generateApiKey,

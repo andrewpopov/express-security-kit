@@ -26,5 +26,11 @@ export type FastifyApiKeyAuthConfig = ApiKeyAuthConfigCore<FastifyRequest>;
  * the route handler; failure sends the reply directly — a Fastify
  * `preHandler` that sends a reply short-circuits the lifecycle, so the route
  * handler is never reached.
+ *
+ * @throws {Error} synchronously, at construction time (never per-request), if
+ * `config` supplies NEITHER `rawAuthenticator` nor `lookup` — a programmer
+ * error caught eagerly rather than surfacing as a 503 on every request. See
+ * `ApiKeyAuthConfigCore.rawAuthenticator`. Supplying BOTH does not throw —
+ * `rawAuthenticator` wins and a one-time deprecation warning is logged.
  */
 export declare function createApiKeyAuth(config: FastifyApiKeyAuthConfig): (request: FastifyRequest, reply: FastifyReply) => Promise<void>;

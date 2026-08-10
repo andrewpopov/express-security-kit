@@ -22,5 +22,11 @@ export type ApiKeyAuthConfig = ApiKeyAuthConfigCore<Request>;
  * This is a thin middleware wrapper around {@link verifyApiKey}: it applies the
  * `optional`-passthrough policy and translates the verification outcome into an
  * HTTP response; the verification core lives in verifyApiKey.
+ *
+ * @throws {Error} synchronously, at construction time (never per-request), if
+ * `config` supplies NEITHER `rawAuthenticator` nor `lookup` — a programmer
+ * error caught eagerly rather than surfacing as a 503 on every request. See
+ * `ApiKeyAuthConfigCore.rawAuthenticator`. Supplying BOTH does not throw —
+ * `rawAuthenticator` wins and a one-time deprecation warning is logged.
  */
 export declare function createApiKeyAuth(config: ApiKeyAuthConfig): RequestHandler;

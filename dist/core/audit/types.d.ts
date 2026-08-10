@@ -68,6 +68,4 @@ export interface AuditBufferConfig {
     onFlushError?: (err: unknown, events: AuditEvent[]) => void;
     /** Logger for internal warnings. Default console. */
     logger?: AuditLogger;
-    /** Injectable clock (ms). Default Date.now. */
-    now?: () => number;
 }

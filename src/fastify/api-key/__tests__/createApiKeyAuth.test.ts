@@ -267,3 +267,46 @@ describe('fastify createApiKeyAuth — audit hooks never affect the decision', (
     expect(warn).toHaveBeenCalled();
   });
 });
+
+describe('createApiKeyAuth — config validation (PKG-149 Finding 2)', () => {
+  it('supplying BOTH lookup and rawAuthenticator does NOT throw — constructs fine, rawAuthenticator wins, and warns once (reversed: lookup used to be REQUIRED, so cairn/smarthome/sano-os all carry a dead lookup today)', async () => {
+    const warn = vi.fn();
+    const lookup = vi.fn(async () => { throw new Error('legacy lookup must not run'); });
+    expect(() =>
+      createApiKeyAuth({
+        prefix: PREFIX,
+        lookup,
+        rawAuthenticator: async () => ({ ok: true, record: record({ id: 'raw-authenticator-record' }) }),
+        logger: { warn },
+      }),
+    ).not.toThrow();
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toMatch(/rawAuthenticator.*lookup.*deprecated/is);
+
+    const out = await invoke(
+      {
+        prefix: PREFIX,
+        lookup,
+        rawAuthenticator: async () => ({ ok: true, record: record({ id: 'raw-authenticator-record' }) }),
+        logger: { warn },
+      },
+      { headers: bearer(RAW) },
+    );
+    expect(out.handlerReached).toBe(true);
+    expect(lookup).not.toHaveBeenCalled();
+  });
+
+  it('supplying NEITHER lookup nor rawAuthenticator throws synchronously at construction, with a clear message', () => {
+    expect(() =>
+      createApiKeyAuth({ prefix: PREFIX } as FastifyApiKeyAuthConfig),
+    ).toThrow(/rawAuthenticator.*lookup/);
+  });
+
+  it('a canonical config (rawAuthenticator only, no lookup) constructs and runs fine', async () => {
+    const out = await invoke(
+      { prefix: PREFIX, rawAuthenticator: async () => ({ ok: true, record: record() }) },
+      { headers: bearer(RAW) },
+    );
+    expect(out.handlerReached).toBe(true);
+  });
+});

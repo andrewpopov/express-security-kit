@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.redactFields = exports.redactUrl = exports.normalizeOrigin = exports.resolveCorsPolicy = exports.createWebhookVerifier = exports.verifyWebhookSignature = exports.auditDeniedHook = exports.auditRateLimitHook = exports.auditFailureHook = exports.buildAuditEvent = exports.ConsoleAuditSink = exports.AuditBuffer = exports.MemoryNonceStore = exports.createRequestSigningVerifier = exports.sha256Hex = exports.signRequest = exports.buildCanonicalString = exports.createThrottledTouchLastUsed = exports.rotateApiKey = exports.maskApiKey = exports.parseApiKey = exports.generateApiKey = exports.normalizeIp = exports.requireScope = exports.timingSafeEqualHex = exports.scopedHmacHasher = exports.sha256Hasher = exports.verifyApiKey = exports.createApiKeyAuth = exports.resolveClientIp = exports.verifiedIdentityKeyResolved = exports.ipKeyResolved = exports.hmacBodyFieldKey = exports.decodedJwtKey = exports.defaultKeyGenerator = exports.verifiedIdentityKey = exports.ipKey = exports.MemoryRateLimitStore = exports.createRateLimiter = exports.createHelmetMiddleware = void 0;
+exports.redactFields = exports.redactUrl = exports.normalizeOrigin = exports.resolveCorsPolicy = exports.createWebhookVerifier = exports.verifyWebhookSignature = exports.auditDeniedHook = exports.auditRateLimitHook = exports.auditFailureHook = exports.buildAuditEvent = exports.ConsoleAuditSink = exports.AuditBuffer = exports.MemoryNonceStore = exports.createRequestSigningVerifier = exports.sha256Hex = exports.signRequest = exports.buildCanonicalString = exports.createThrottledTouchLastUsed = exports.rotateApiKey = exports.maskApiKey = exports.parseApiKey = exports.generateApiKey = exports.createCanonicalRawAuthenticator = exports.normalizeIp = exports.requireScope = exports.timingSafeEqualHex = exports.scopedHmacHasher = exports.sha256Hasher = exports.verifyApiKey = exports.createApiKeyAuth = exports.resolveClientIp = exports.verifiedIdentityKeyResolved = exports.ipKeyResolved = exports.hmacBodyFieldKey = exports.decodedJwtKey = exports.defaultKeyGenerator = exports.verifiedIdentityKey = exports.ipKey = exports.MemoryRateLimitStore = exports.createRateLimiter = exports.createHelmetMiddleware = void 0;
 // Side-effect import: merges the `securityContext`/`rawBody` fields onto the
 // ambient `Express.Request` type. MUST be a value import (not `import type`)
 // so the augmentation is actually loaded by root consumers.
@@ -46,6 +46,10 @@ var requireScope_1 = require("./express/api-key/requireScope");
 Object.defineProperty(exports, "requireScope", { enumerable: true, get: function () { return requireScope_1.requireScope; } });
 var normalizeIp_1 = require("./core/api-key/normalizeIp");
 Object.defineProperty(exports, "normalizeIp", { enumerable: true, get: function () { return normalizeIp_1.normalizeIp; } });
+// createCanonicalRawAuthenticator: pinned to `Request`, same reasoning as
+// verifyApiKey/createApiKeyAuth above — it returns a RawApiKeyAuthenticator<Req>.
+const canonicalAuthenticator_1 = require("./core/api-key/canonicalAuthenticator");
+exports.createCanonicalRawAuthenticator = canonicalAuthenticator_1.createCanonicalRawAuthenticator;
 // API-key ISSUANCE (mint/parse/mask/rotate). Framework-agnostic — no Request
 // pinning needed, unlike verifyApiKey/createApiKeyAuth above.
 var issuance_1 = require("./core/api-key/issuance");

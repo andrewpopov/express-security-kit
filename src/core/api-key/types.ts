@@ -93,14 +93,39 @@ export interface ApiKeyStaticKey {
 export interface ApiKeyAuthConfigCore<Req extends SecurityRequest = SecurityRequest> {
   /** Required key prefix (e.g. 'cairn_', 'ssk_ak_'). Keys must start with it. */
   prefix: string;
-  /** Hasher for DB-backed keys. Default: sha256Hasher(). */
+  /** Hasher for DB-backed keys (legacy path only). Default: sha256Hasher(). */
   hasher?: KeyHasher;
-  /** Look up a stored record by hashed key. Return null when not found. */
-  lookup: (hash: string) => Promise<ApiKeyRecord | null>;
   /**
-   * Canonical credential path. When supplied, the kit does not hash or look up
-   * the raw key itself; `lookup` remains required only for legacy callers and
-   * is ignored. This lets api-access-kit own credential formats and peppers.
+   * LEGACY credential path: look up a stored record by the hash of the whole
+   * wire credential. Return null when not found. OPTIONAL when
+   * `rawAuthenticator` (the canonical path) is supplied — you no longer need
+   * to supply a dead `lookup` just to satisfy the type. See {@link
+   * createCanonicalRawAuthenticator} for the canonical replacement: hash the
+   * SECRET SEGMENT only and look up by the public keyId.
+   *
+   * If BOTH `lookup` and `rawAuthenticator` are supplied, `rawAuthenticator`
+   * wins and `lookup` is silently ignored (unchanged behavior) — a one-time
+   * deprecation warning is logged. This is DEPRECATED: supplying both will
+   * become a construction-time error in a future major version, so remove
+   * the now-unnecessary `lookup` once you're on `rawAuthenticator`.
+   */
+  lookup?: (hash: string) => Promise<ApiKeyRecord | null>;
+  /**
+   * CANONICAL credential path. When supplied, the kit does not hash or look
+   * up the raw key itself. Use {@link createCanonicalRawAuthenticator} for
+   * the kit's own generic implementation (parse `<prefix><keyId>.<secret>`,
+   * look up by the public keyId, constant-time compare the stored hash of the
+   * secret segment), or supply your own (e.g. one backed by
+   * `@andrewpopov/api-access-kit`).
+   *
+   * At least one of `lookup` or `rawAuthenticator` must be supplied.
+   * Supplying NEITHER is a configuration error that can't work under any
+   * path: `createApiKeyAuth` (Express and Fastify) rejects it synchronously
+   * at construction with a thrown `Error`; the lower-level `verifyApiKey`,
+   * which never throws, instead fails every request closed with `reason:
+   * 'error'` (mapped to `errorStatus`, default 503 — the same treatment as a
+   * throwing `lookup`). Supplying BOTH is allowed (see `lookup` above) —
+   * only NEITHER is rejected.
    */
   rawAuthenticator?: RawApiKeyAuthenticator<Req>;
   /**

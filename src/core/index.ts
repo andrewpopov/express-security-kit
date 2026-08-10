@@ -129,6 +129,16 @@ export type {
   MemoryNonceStoreOptions,
 } from './signing/nonceStore';
 
+export { createRequestSignatureVerifierCore } from './signing/verifyRequestSignature';
+export type {
+  RequestSignatureVerifierCore,
+  RequestSignatureVerifierConfigCore,
+  RequestSignatureVerifyInput,
+  RequestSignatureVerifyOutcome,
+  SigningFailureReason,
+  SigningLogger,
+} from './signing/verifyRequestSignature';
+
 // Note: the Redis store is intentionally NOT exported here. Import it from the
 // '@andrewpopov/express-security-kit/redis-store' subpath so this entry never
 // references ioredis.

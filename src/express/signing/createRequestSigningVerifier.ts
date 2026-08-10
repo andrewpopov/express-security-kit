@@ -1,26 +1,19 @@
-import { createHmac } from 'node:crypto';
 import type { Request, Response, NextFunction, RequestHandler } from 'express';
 import type { SecurityContext } from '../../core/context';
-import { timingSafeEqualHex } from '../../core/api-key/hashers';
-import { buildCanonicalString } from '../../core/signing/signRequest';
+import { createRequestSignatureVerifierCore } from '../../core/signing/verifyRequestSignature';
+import type {
+  RequestSignatureVerifyInput,
+  SigningFailureReason,
+  SigningLogger,
+} from '../../core/signing/verifyRequestSignature';
 import type { NonceStore } from '../../core/signing/nonceStore';
 
-/** Machine-readable failure reasons (passed to onFailure, never to the client). */
-export type SigningFailureReason =
-  | 'no_secret'
-  | 'timestamp'
-  | 'skew'
-  | 'nonce'
-  | 'signature'
-  | 'replay'
-  | 'store_error'
-  | 'no_raw_body'
-  | 'error';
-
-/** Minimal logger surface; defaults to console. */
-export interface SigningLogger {
-  warn: (message: string, meta?: unknown) => void;
-}
+// `SigningFailureReason` / `SigningLogger` now live in the framework-agnostic
+// core (PKG-151) — decision vocabulary, not an HTTP concern, shared by every
+// adapter that calls `createRequestSignatureVerifierCore`. Re-exported here
+// (and thus from the package root) so existing consumer imports of these two
+// names from this module keep working unchanged.
+export type { SigningFailureReason, SigningLogger };
 
 export interface SigningHeaderNames {
   timestamp: string;
@@ -75,21 +68,9 @@ export interface RequestSigningVerifierConfig {
   logger?: SigningLogger;
 }
 
-const DEFAULT_NONCE_FORMAT = /^[A-Za-z0-9:_-]{8,128}$/;
-const HEX_64 = /^[a-f0-9]{64}$/i;
-const SKEW_MIN_SECONDS = 30;
-const SKEW_MAX_SECONDS = 900;
-const DEFAULT_SKEW_SECONDS = 300;
-
 const consoleLogger: SigningLogger = {
   warn: (message, meta) => console.warn(message, meta ?? ''),
 };
-
-function clampSkewSeconds(value: number | undefined): number {
-  const v = value ?? DEFAULT_SKEW_SECONDS;
-  if (!Number.isFinite(v)) return DEFAULT_SKEW_SECONDS;
-  return Math.min(SKEW_MAX_SECONDS, Math.max(SKEW_MIN_SECONDS, v));
-}
 
 /** First string value of a (possibly array) header. */
 function headerValue(req: Request, name: string): string | undefined {
@@ -139,16 +120,17 @@ function unauthorized(res: Response): void {
  * an unavailable nonce store — yields a GENERIC 401 and the request does NOT
  * proceed. The specific reason goes only to `onFailure`.
  *
- * The signed nonce is consumed AFTER the signature is proven valid and BEFORE
- * `next()`, so an attacker cannot burn a victim's nonce with an unsigned/forged
- * request, and a valid signature can be used at most once within the skew TTL.
+ * This is a THIN adapter over {@link createRequestSignatureVerifierCore}: all
+ * decision logic (ordering, fail-closed semantics, the nonce-consumed-after-
+ * signature-proven rule) lives in the framework-agnostic core. This module
+ * only does Express-specific extraction — reading headers, resolving the body
+ * source, resolving the secret, deriving the nonce scope, and the
+ * `requireRawBody` bodyless/custom-extractor exemption — and translates the
+ * core's outcome into a response (`onFailure` + generic 401, or `next()`).
  */
 export function createRequestSigningVerifier(
   config: RequestSigningVerifierConfig,
 ): RequestHandler {
-  const maxSkewSeconds = clampSkewSeconds(config.maxSkewSeconds);
-  const maxSkewMs = maxSkewSeconds * 1000;
-  const nonceFormat = config.nonceFormat ?? DEFAULT_NONCE_FORMAT;
   const headerNames: SigningHeaderNames = {
     timestamp: config.headerNames?.timestamp ?? 'x-timestamp',
     nonce: config.headerNames?.nonce ?? 'x-nonce',
@@ -157,9 +139,30 @@ export function createRequestSigningVerifier(
   const nonceScope = config.nonceScope ?? defaultNonceScope;
   const usingDefaultBodySource = config.bodySource === undefined;
   const bodySource = config.bodySource ?? defaultBodySource;
-  const requireRawBody = config.requireRawBody ?? false;
-  const clock = config.now ?? Date.now;
   const logger = config.logger ?? consoleLogger;
+
+  const core = createRequestSignatureVerifierCore({
+    maxSkewSeconds: config.maxSkewSeconds,
+    nonceFormat: config.nonceFormat,
+    nonceStore: config.nonceStore,
+    requireRawBody: config.requireRawBody,
+    now: config.now,
+    logger: config.logger,
+  });
+
+  /**
+   * Whether the `requireRawBody` precondition is satisfied for this request:
+   * only body-bearing methods (never GET/HEAD) using the DEFAULT body
+   * extractor are subject to it — a custom `bodySource` participates as
+   * provided and always reports satisfied, matching the pre-carve behaviour.
+   */
+  function hasRawBody(req: Request): boolean {
+    if (!usingDefaultBodySource) return true;
+    const method = (req.method ?? '').toUpperCase();
+    if (method === 'GET' || method === 'HEAD') return true;
+    const rawBody = req.rawBody;
+    return typeof rawBody === 'string' || Buffer.isBuffer(rawBody);
+  }
 
   const fail = (
     req: Request,
@@ -188,101 +191,34 @@ export function createRequestSigningVerifier(
     try {
       const ctx = req.securityContext;
 
-      // 1. Resolve the secret. Unresolved (undefined/empty) → fail closed.
+      // Resolve the secret. Unresolved (undefined/empty) → the core fails
+      // closed with `no_secret`.
       const secret =
         typeof config.secret === 'function'
           ? await config.secret(req, ctx)
           : config.secret;
-      if (!secret) {
-        return fail(req, res, 'no_secret');
-      }
 
-      // 2. Timestamp: must be a finite, positive integer within skew.
-      const timestampRaw = headerValue(req, headerNames.timestamp);
-      if (timestampRaw === undefined) {
-        return fail(req, res, 'timestamp');
-      }
-      const timestampMs = Number(timestampRaw);
-      if (!Number.isFinite(timestampMs) || timestampMs <= 0) {
-        return fail(req, res, 'timestamp');
-      }
-      if (Math.abs(clock() - timestampMs) > maxSkewMs) {
-        return fail(req, res, 'skew');
-      }
-
-      // 3. Nonce: present and well-formed.
-      const nonce = headerValue(req, headerNames.nonce);
-      if (nonce === undefined || !nonceFormat.test(nonce)) {
-        return fail(req, res, 'nonce');
-      }
-
-      // 4. Signature header: present and 64-hex.
-      const signatureRaw = headerValue(req, headerNames.signature);
-      if (signatureRaw === undefined || !HEX_64.test(signatureRaw)) {
-        return fail(req, res, 'signature');
-      }
-      const presented = signatureRaw.toLowerCase();
-
-      // 4b. requireRawBody: only for body-bearing methods (never GET/HEAD),
-      // and only when using the DEFAULT body extractor — a custom bodySource
-      // participates as provided.
-      if (requireRawBody && usingDefaultBodySource) {
-        const method = (req.method ?? '').toUpperCase();
-        const bodyless = method === 'GET' || method === 'HEAD';
-        if (!bodyless) {
-          const rawBody = req.rawBody;
-          const hasRawBody = typeof rawBody === 'string' || Buffer.isBuffer(rawBody);
-          if (!hasRawBody) {
-            return fail(req, res, 'no_raw_body');
-          }
-        }
-      }
-
-      // 5. Recompute the expected signature and timing-safe compare.
-      const canonical = buildCanonicalString({
+      const input: RequestSignatureVerifyInput = {
         method: req.method,
         url: req.originalUrl,
-        timestampMs,
-        nonce,
+        timestampHeader: headerValue(req, headerNames.timestamp),
+        nonceHeader: headerValue(req, headerNames.nonce),
+        signatureHeader: headerValue(req, headerNames.signature),
         body: bodySource(req),
-      });
-      const expected = createHmac('sha256', secret)
-        .update(canonical)
-        .digest('hex');
-      if (!timingSafeEqualHex(presented, expected)) {
-        return fail(req, res, 'signature');
-      }
+        secret,
+        nonceScope: nonceScope(req, ctx),
+        hasRawBody: hasRawBody(req),
+      };
 
-      // 6. Replay protection: consume the nonce ONLY now that the signature is
-      //    proven valid. Store unavailable (throw) → FAIL CLOSED.
-      const scope = nonceScope(req, ctx);
-      // Typed as unknown on purpose: a custom store might violate the contract
-      // and return something other than 'ok' | 'replay'; we defend against that.
-      let consumeResult: unknown;
-      try {
-        consumeResult = await config.nonceStore.consume(scope, nonce, maxSkewMs);
-      } catch (err) {
-        logger.warn('[express-security-kit] nonce store unavailable', err);
-        return fail(req, res, 'store_error');
-      }
-      if (consumeResult === 'replay') {
-        return fail(req, res, 'replay');
-      }
-      // Proceed ONLY on an explicit 'ok'. Any other value (undefined/false/
-      // garbage from a misbehaving custom store that failed to record the
-      // nonce) must NOT proceed — fail closed rather than allow a possible
-      // replay.
-      if (consumeResult !== 'ok') {
-        logger.warn(
-          '[express-security-kit] nonce store returned an unexpected result',
-          { result: consumeResult },
-        );
-        return fail(req, res, 'store_error');
+      const outcome = await core.verify(input);
+      if (outcome.type === 'fail') {
+        return fail(req, res, outcome.reason);
       }
 
       return next();
     } catch (err) {
-      // FAIL CLOSED on any unexpected error.
+      // FAIL CLOSED on any unexpected error (including a throwing secret
+      // resolver, which the core never sees).
       logger.warn('[express-security-kit] signing verifier error', err);
       return fail(req, res, 'error');
     }

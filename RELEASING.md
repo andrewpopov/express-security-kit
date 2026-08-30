@@ -10,25 +10,16 @@ fragment format.
    `npm run release:note -- --kind <kind> --slug <short-slug> --summary "User-facing summary"`
    (or by hand). `npm run release:hygiene -- --base origin/master` checks that a
    change touching `src/` (or `package.json`, `scripts/`) shipped with one.
-2. **Run the full local verify battery** — every gate this repo has, in order:
+2. **Run the full local verify battery:**
 
    ```bash
    npm ci
-   npm run typecheck          # tsc --noEmit -p tsconfig.typecheck.json, then check:core-agnostic
-   npm run test
-   npm run build
-   npm run verify:dist-fresh  # rebuilds and diffs the committed dist/ against src/
-   npm run verify:pack
-   npm run audit:runtime      # npm audit --omit=dev --audit-level=high
-   npm run audit:development  # npm audit --audit-level=high
+   npm run verify
    ```
 
-   `npm run verify` chains `typecheck`, `test`, `build`, `verify:pack`,
-   `audit:runtime`, and `audit:development` for you, but does **not** include
-   `verify:dist-fresh` — run that separately, since it rebuilds `dist/` and
-   fails if the committed output doesn't match `src/`. `check:core-agnostic`
-   is not a standalone step here: it's chained onto the end of `typecheck` and
-   asserts `src/core` stays framework-agnostic (no `express` imports).
+   `verify` chains type checking, the core-agnostic boundary, tests, build,
+   committed-`dist/` freshness, packed-consumer verification, and both runtime
+   and development dependency audits.
 3. **Cut the release:** `npm run release:cut` compiles the unreleased
    fragments into a new `## <version>` section at the top of `CHANGELOG.md`,
    bumps `package.json`, and archives the consumed fragments.

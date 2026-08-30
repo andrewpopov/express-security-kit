@@ -1,6 +1,6 @@
 {
   "name": "@andrewpopov/express-security-kit",
-  "version": "1.9.0",
+  "version": "2.0.0",
   "description": "Dependency-light Express security library. Owns the machinery (helmet preset, rate limiter); consuming services inject all policy.",
   "author": "Andrew Popov",
   "license": "MIT",
@@ -78,7 +78,7 @@
     "verify:dist-fresh": "node scripts/verify-dist-fresh.mjs",
     "audit:runtime": "npm audit --omit=dev --audit-level=high",
     "audit:development": "npm audit --audit-level=high",
-    "verify": "npm run typecheck && npm test && npm run build && npm run verify:pack && npm run audit:runtime && npm run audit:development",
+    "verify": "npm run typecheck && npm test && npm run build && npm run verify:dist-fresh && npm run verify:pack && npm run audit:runtime && npm run audit:development",
     "release:note": "release-kit note",
     "release:notes": "release-kit notes",
     "release:bump": "release-kit bump",

@@ -1,5 +1,137 @@
 # Changelog
 
+## 2.0.0
+
+- createApiKeyAuth (Express and Fastify) now throws synchronously at construction if config supplies NEITHER rawAuthenticator nor lookup. Supplying BOTH is unaffected — see the separate deprecation note.
+  `ApiKeyAuthConfigCore.lookup` is now optional: a canonical config
+  (`rawAuthenticator` only) no longer needs a dead `lookup` callback just to
+  satisfy the type. The only construction-time rejection is a config that
+  supplies **neither** `rawAuthenticator` nor `lookup` — a shape that cannot
+  authenticate under any code path.
+  
+  This case was already fully broken: on master today, "neither supplied"
+  already fails every request with `reason: 'error'`/503, via an uncaught
+  `TypeError` from calling `undefined` as `lookup`, swallowed by
+  `verifyApiKey`'s fail-closed catch-all. Nothing that could serve traffic
+  relies on this shape. The only change is *when* the failure surfaces —
+  `createApiKeyAuth` now throws a descriptive `Error` immediately at
+  construction (fail fast, at boot) instead of deferring to the first request.
+  `verifyApiKey`, used directly, is unchanged: it still never throws and still
+  resolves to `{ reason: 'error', status: 503 }` for this shape.
+  
+  Supplying **both** `rawAuthenticator` and `lookup` is explicitly NOT rejected
+  — see the separate `changed` note in this release for that behavior.
+- AuditBufferConfig.now (an injectable clock) is removed: AuditBuffer never read it, so it was a documented no-op. Remove any now: () => ... you were passing to new AuditBuffer(...).
+  `AuditBuffer` has no time-dependent logic of its own — its periodic flush
+  uses a real `setInterval`/`setTimeout`, not a computed "now" — so `now` was
+  dead from the day it was added: nothing in `AuditBuffer` ever called it.
+  Removed rather than wired up. If you were passing `now` to `new
+  AuditBuffer(...)`, it had no effect and can simply be dropped; a TypeScript
+  consumer will see it as an unknown-property compile error. Checked against
+  the consuming fleet: no current consumer passes `AuditBufferConfig.now`, so
+  this removal has no practical impact on anyone shipping today. (Note:
+  `BuildAuditEventOptions.now`, used by `buildAuditEvent` to stamp each event's
+  timestamp, is a different, still-supported option — unaffected by this
+  change.)
+- New export createCanonicalRawAuthenticator: a generic RawApiKeyAuthenticator adapter (parse the presented key, look up by public keyId, constant-time compare the secret-segment hash) that any host can wire to its own store.
+  Give it a `prefix` and a `findByKeyId(keyId)` lookup and it does the rest:
+  parse `<prefix><keyId>.<secret>`, look up the record by the PUBLIC keyId
+  (indexed, never a table scan), and constant-time compare the stored hash
+  against `hasher(secret)` — the hash of the secret segment alone, exactly what
+  `generateApiKey` stores. Fails closed and preserves the existing failure-reason
+  vocabulary (`not_found`, `hash_mismatch`, `unavailable`); a throwing
+  `findByKeyId` maps to `'unavailable'` (reported at `errorStatus`, default 503),
+  never a 401. No runtime dependency on any other package — wire it to any
+  store, including one backed by `@andrewpopov/api-access-kit`.
+  
+  An unknown keyId is not a short-circuit: it still runs the same `hasher` +
+  constant-time-compare work a known keyId would, against a fixed dummy hash
+  computed once per authenticator (never per request, never derived from
+  anything a caller supplies) — the same `dummyHash` pattern `auth-kit` uses
+  (PKG-137). Without this, `findByKeyId` returning `null` would be a key-ID
+  existence oracle: observable via timing, and — more reliably, with no timing
+  measurement at all — via *reason*, since a throwing `hasher` would otherwise
+  401 (`not_found`) an unknown keyId but 503 (`unavailable`) a known one. A
+  throwing `hasher` now maps to `'unavailable'` (an infrastructure fault, not an
+  auth decision) identically for both, closing that gap.
+- New export createRequestSignatureVerifierCore: the HMAC request-signature verification decision, carved into the framework-agnostic core.
+  The kit's catalog role is "framework-agnostic core + Express adapters", but
+  signing broke that: `@andrewpopov/express-security-kit/core` could `signRequest`
+  but not verify one — every check (secret resolution, timestamp/skew, nonce
+  format, signature recomputation, and replay-protected nonce consumption) lived
+  inside `createRequestSigningVerifier`, pinned to an Express `RequestHandler`.
+  `createRequestSignatureVerifierCore()` carves that decision out, mirroring the
+  PKG-107 rate-limit carve: `verify(input)` takes plain data — method, url, the
+  three header values, the body string, the resolved secret, the nonce scope,
+  and whether a raw body was present — and returns `{ type: 'ok' }` or
+  `{ type: 'fail', reason }`, performing the exact same ordered checks and
+  fail-closed semantics as before (crucially, the nonce is still consumed only
+  AFTER the signature is proven valid, and a nonce-store throw or an
+  unrecognized store result still fails closed). `createRequestSigningVerifier`
+  is now a thin Express adapter over this core — same public config, same
+  behaviour, same tests, unmodified and passing. This is what lets a Fastify (or
+  any other) adapter reuse the exact verification logic instead of
+  reimplementing HMAC/replay checking from scratch.
+- A config supplying both rawAuthenticator and lookup no longer throws: rawAuthenticator wins and lookup is ignored (unchanged), but a one-time deprecation warning is now logged, since lookup used to be REQUIRED and every canonical-path consumer was forced to supply a dead one.
+  Before this release, `lookup` was REQUIRED on `ApiKeyAuthConfigCore`, so every
+  canonical-path (`rawAuthenticator`) consumer had to supply a dead `lookup`
+  just to satisfy the type — several real services do exactly this today.
+  Behavior for that shape is UNCHANGED: `rawAuthenticator` still wins and
+  `lookup` is still silently ignored. What's new is visibility: a one-time
+  (per config object, not per request) deprecation warning is logged via
+  `config.logger` (default `console.warn`), naming the problem and pointing at
+  the fix — delete the now-unnecessary `lookup`. Supplying both will become a
+  construction-time error in a future major version; this release only
+  announces that, it does not enforce it. No action is required now, but
+  removing the dead `lookup` silences the warning and is recommended.
+- createCanonicalRawAuthenticator now reports reason: 'malformed' for a structurally invalid key (no '.' separator), instead of collapsing it into 'not_found' alongside an unknown keyId.
+  Previously, `createCanonicalRawAuthenticator` mapped EVERY unverifiable key —
+  a structurally malformed one (missing the required `.` separator) and a
+  well-formed one nobody issued — to the same `not_found` reason, because
+  `RawApiKeyAuthentication` had no `malformed` member to report. It now reports
+  `malformed` for the structural case, distinct from `not_found` for a genuine
+  unknown keyId. `RawApiKeyAuthentication.reason` is widened accordingly
+  (`bad_prefix` stays excluded — that reason remains reserved for
+  `verifyApiKey`'s own upstream prefix check).
+  
+  **The client-visible response is unchanged: still a generic 401 either way.**
+  This is an observability improvement only — monitoring and `onFailure` can
+  now tell "a client is sending structurally broken credentials" (usually a
+  client bug or a truncated secret) apart from "a client is presenting keys we
+  never issued" (usually revocation or probing), which warrant different
+  operational responses. Nothing leaks and nothing is mis-authorized. A custom
+  `rawAuthenticator` you've written yourself is unaffected — this only changes
+  `createCanonicalRawAuthenticator`'s own mapping and the type it's now allowed
+  to report through.
+- the aggregate verification gate now rejects stale committed build output
+  The aggregate verification lane now checks the committed artifact before pack
+  and audit gates complete.
+- The documented API-key recipe (mint with generateApiKey, verify by public keyId) now actually works: createCanonicalRawAuthenticator implements it, and rawAuthenticator configs no longer need a dead lookup callback.
+  Previously, a key minted with `generateApiKey` (which stores `hash =
+  hasher(secret)`, the secret segment only) always failed verification through
+  the documented `lookup`-based recipe, because the legacy verifier compares
+  against `hasher(rawKey)` — the whole wire credential. The README's own
+  suggested remedy ("parse, look up by the public keyId...") could not actually
+  be expressed, since `lookup` receives only a computed hash, never the raw key.
+  `createCanonicalRawAuthenticator` is the real implementation of that recipe:
+  wire it into `rawAuthenticator` and a `generateApiKey`-minted key now
+  authenticates end to end. The legacy `lookup`/`hasher` path is unchanged and
+  still supported for existing stores.
+- The default API-key security context now carries the record's per-key hmacSecret, so request signing resolves it without a custom onAuthenticated.
+  Describe the user-facing change in one short paragraph before releasing.
+- MemoryNonceStore now reserves capacity before inserting, so a rejected nonce no longer grows the store past maxTrackedNonces.
+  `MemoryNonceStore` inserted a nonce before checking its capacity, so the
+  over-cap entry survived the resulting throw and every subsequent unique nonce
+  grew the map further — the store leaked without bound under exactly the
+  condition its documented cap claimed to guard. Capacity is now reserved before
+  insertion (still pruning expired entries first), so a rejected nonce leaves the
+  store untouched. The "never evict a live nonce" guarantee and the effective
+  maximum are unchanged.
+  
+  `maxTrackedNonces` must now be a positive **integer**. A fractional value was
+  previously accepted and would admit `ceil(cap)` entries under the new
+  reservation check, which is more than the configured number reads as allowing.
+
 ## 1.9.0
 
 - A Fastify adapter (`./fastify`) — api-key auth and CORS over the existing agnostic core

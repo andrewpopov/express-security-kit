@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { MemoryRateLimitStore } from '../store';
 
 const stores: MemoryRateLimitStore[] = [];
@@ -183,5 +183,39 @@ describe('MemoryRateLimitStore — concurrency', () => {
       Array.from({ length: N }, (_, i) => store.hit(`key-${i}`, 1000, 1000)),
     );
     expect(store.size).toBeLessThanOrEqual(50);
+  });
+});
+
+describe('MemoryRateLimitStore — eviction clock', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('keeps buckets hit with a pinned caller clock until the STORE clock goes stale', async () => {
+    vi.useFakeTimers();
+    let storeNow = 5_000_000;
+    const store = makeStore({ cleanupIntervalMs: 60_000, now: () => storeNow });
+    const windowMs = 1000;
+    const pinned = 1_000_000_030_000; // caller clock far from the store clock
+    await store.hit('k', windowMs, pinned);
+
+    // One cleanup tick; the store clock advanced well under two windows.
+    storeNow += 1500;
+    vi.advanceTimersByTime(60_000);
+    expect(store.size).toBe(1);
+    const again = await store.hit('k', windowMs, pinned);
+    expect(again.current).toBe(2);
+  });
+
+  it('evicts a bucket untouched for more than two windows of the STORE clock', async () => {
+    vi.useFakeTimers();
+    let storeNow = 5_000_000;
+    const store = makeStore({ cleanupIntervalMs: 60_000, now: () => storeNow });
+    const windowMs = 1000;
+    await store.hit('k', windowMs, 1_000_000_030_000);
+
+    storeNow += 2001;
+    vi.advanceTimersByTime(60_000);
+    expect(store.size).toBe(0);
   });
 });

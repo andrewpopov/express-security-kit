@@ -53,8 +53,11 @@ interface WindowBucket {
   current: number;
   /** Final count of the immediately-preceding window (same length). */
   previous: number;
-  /** Last time this bucket was touched, for stale eviction. */
-  lastSeen: number;
+  /**
+   * Last time this bucket was touched, on the STORE's housekeeping clock (never
+   * the caller's `now`), for stale eviction.
+   */
+  lastTouched: number;
 }
 
 export interface MemoryRateLimitStoreOptions {
@@ -62,6 +65,13 @@ export interface MemoryRateLimitStoreOptions {
   cleanupIntervalMs?: number;
   /** Max number of distinct keys tracked before drop-oldest eviction. */
   maxTrackedKeys?: number;
+  /**
+   * The store's own housekeeping clock (epoch ms). Used ONLY to stamp and
+   * evict stale buckets, never for window math, which uses the `now` passed to
+   * `hit`. Keeping the two separate means a caller that pins or skews `now`
+   * (e.g. deterministic tests) cannot make eviction misfire. Default `Date.now`.
+   */
+  now?: () => number;
 }
 
 const DEFAULT_CLEANUP_INTERVAL_MS = 60_000;
@@ -75,17 +85,21 @@ const DEFAULT_MAX_TRACKED_KEYS = 100_000;
  * key's previous-window count is well defined for the sliding estimate. A
  * periodic `.unref()`'d timer evicts buckets untouched for two window lengths,
  * and a `MAX_TRACKED_KEYS` cap triggers drop-oldest eviction to bound memory.
+ * "Untouched" is measured on the store's own clock (`options.now`, default
+ * `Date.now`), independent of the `now` callers pass to `hit` for window math.
  */
 export class MemoryRateLimitStore implements RateLimitStore {
   private readonly buckets = new Map<string, WindowBucket>();
   private readonly cleanupIntervalMs: number;
   private readonly maxTrackedKeys: number;
+  private readonly clock: () => number;
   private timer: ReturnType<typeof setInterval> | undefined;
 
   constructor(options: MemoryRateLimitStoreOptions = {}) {
     this.cleanupIntervalMs =
       options.cleanupIntervalMs ?? DEFAULT_CLEANUP_INTERVAL_MS;
     this.maxTrackedKeys = options.maxTrackedKeys ?? DEFAULT_MAX_TRACKED_KEYS;
+    this.clock = options.now ?? Date.now;
     this.startTimer();
   }
 
@@ -112,7 +126,7 @@ export class MemoryRateLimitStore implements RateLimitStore {
         windowMs,
         current: 0,
         previous: 0,
-        lastSeen: now,
+        lastTouched: this.clock(),
       };
     } else {
       // Re-insert to refresh insertion order for drop-oldest eviction.
@@ -121,7 +135,7 @@ export class MemoryRateLimitStore implements RateLimitStore {
     }
 
     bucket.current += 1;
-    bucket.lastSeen = now;
+    bucket.lastTouched = this.clock();
     this.buckets.set(bucketKey, bucket);
 
     this.evictIfNeeded();
@@ -212,9 +226,9 @@ export class MemoryRateLimitStore implements RateLimitStore {
   }
 
   private cleanup(): void {
-    const now = Date.now();
+    const now = this.clock();
     for (const [key, bucket] of this.buckets) {
-      if (now - bucket.lastSeen > bucket.windowMs * 2) {
+      if (now - bucket.lastTouched > bucket.windowMs * 2) {
         this.buckets.delete(key);
       }
     }

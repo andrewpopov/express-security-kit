@@ -11,6 +11,8 @@ const DEFAULT_MAX_TRACKED_KEYS = 100000;
  * key's previous-window count is well defined for the sliding estimate. A
  * periodic `.unref()`'d timer evicts buckets untouched for two window lengths,
  * and a `MAX_TRACKED_KEYS` cap triggers drop-oldest eviction to bound memory.
+ * "Untouched" is measured on the store's own clock (`options.now`, default
+ * `Date.now`), independent of the `now` callers pass to `hit` for window math.
  */
 class MemoryRateLimitStore {
     constructor(options = {}) {
@@ -18,6 +20,7 @@ class MemoryRateLimitStore {
         this.cleanupIntervalMs =
             options.cleanupIntervalMs ?? DEFAULT_CLEANUP_INTERVAL_MS;
         this.maxTrackedKeys = options.maxTrackedKeys ?? DEFAULT_MAX_TRACKED_KEYS;
+        this.clock = options.now ?? Date.now;
         this.startTimer();
     }
     startTimer() {
@@ -41,7 +44,7 @@ class MemoryRateLimitStore {
                 windowMs,
                 current: 0,
                 previous: 0,
-                lastSeen: now,
+                lastTouched: this.clock(),
             };
         }
         else {
@@ -50,7 +53,7 @@ class MemoryRateLimitStore {
             this.rollWindow(bucket, windowStart);
         }
         bucket.current += 1;
-        bucket.lastSeen = now;
+        bucket.lastTouched = this.clock();
         this.buckets.set(bucketKey, bucket);
         this.evictIfNeeded();
         return { current: bucket.current, previous: bucket.previous, resetAt };
@@ -137,9 +140,9 @@ class MemoryRateLimitStore {
         }
     }
     cleanup() {
-        const now = Date.now();
+        const now = this.clock();
         for (const [key, bucket] of this.buckets) {
-            if (now - bucket.lastSeen > bucket.windowMs * 2) {
+            if (now - bucket.lastTouched > bucket.windowMs * 2) {
                 this.buckets.delete(key);
             }
         }

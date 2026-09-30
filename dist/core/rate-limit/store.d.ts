@@ -47,6 +47,13 @@ export interface MemoryRateLimitStoreOptions {
     cleanupIntervalMs?: number;
     /** Max number of distinct keys tracked before drop-oldest eviction. */
     maxTrackedKeys?: number;
+    /**
+     * The store's own housekeeping clock (epoch ms). Used ONLY to stamp and
+     * evict stale buckets, never for window math, which uses the `now` passed to
+     * `hit`. Keeping the two separate means a caller that pins or skews `now`
+     * (e.g. deterministic tests) cannot make eviction misfire. Default `Date.now`.
+     */
+    now?: () => number;
 }
 /**
  * In-memory, single-process rate-limit store. Suitable for a single Node
@@ -56,11 +63,14 @@ export interface MemoryRateLimitStoreOptions {
  * key's previous-window count is well defined for the sliding estimate. A
  * periodic `.unref()`'d timer evicts buckets untouched for two window lengths,
  * and a `MAX_TRACKED_KEYS` cap triggers drop-oldest eviction to bound memory.
+ * "Untouched" is measured on the store's own clock (`options.now`, default
+ * `Date.now`), independent of the `now` callers pass to `hit` for window math.
  */
 export declare class MemoryRateLimitStore implements RateLimitStore {
     private readonly buckets;
     private readonly cleanupIntervalMs;
     private readonly maxTrackedKeys;
+    private readonly clock;
     private timer;
     constructor(options?: MemoryRateLimitStoreOptions);
     private startTimer;

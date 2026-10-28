@@ -157,8 +157,9 @@ Patterns that came out of the review as shipped, tested fixes:
 - **OAuth account-adoption defense** — resolve by provider id, refuse to adopt
   an existing password account, claim only a no-password placeholder (with
   hygiene on the claim).
-- **CORS deny-by-default** — an empty allowlist means deny (not allow-all), and
-  absence doesn't boot-fail a same-origin app.
+- **CORS deny-by-default** — an empty allowlist means deny (not allow-all),
+  `resolveCorsPolicy` throws in production on any non-`https://` origin (no
+  loopback exception), and absence doesn't boot-fail a same-origin app.
 - **Structural mount-coverage tripwire** — a test that enumerates route mounts
   and fails when a new one lacks the required guard.
 - **Stored-XSS invariant pinned by a tripwire** — the sanitizer has a single

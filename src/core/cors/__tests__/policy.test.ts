@@ -21,6 +21,39 @@ describe('resolveCorsPolicy — prod fail-closed', () => {
   });
 });
 
+describe('resolveCorsPolicy — production requires https:// origins', () => {
+  it('throws naming a non-https origin in production (origins)', () => {
+    expect(() =>
+      resolveCorsPolicy({ env: 'production', origins: ['http://insecure.example.com'] }),
+    ).toThrow(/http:\/\/insecure\.example\.com.*https/);
+  });
+
+  it('throws for a non-https origin in production (originsCsv), even beside a valid one', () => {
+    expect(() =>
+      resolveCorsPolicy({
+        env: 'production',
+        originsCsv: 'https://app.example.com, http://insecure.example.com',
+      }),
+    ).toThrow(/http:\/\/insecure\.example\.com/);
+  });
+
+  it('throws for http loopback in production (no loopback exception)', () => {
+    expect(() =>
+      resolveCorsPolicy({ env: 'production', origins: ['http://localhost:3000'] }),
+    ).toThrow(/http:\/\/localhost:3000/);
+  });
+
+  it('accepts https origins in production', () => {
+    const policy = resolveCorsPolicy({ env: 'production', origins: ['https://app.example.com'] });
+    expect(policy.allow('https://app.example.com')).toBe(true);
+  });
+
+  it('accepts http origins outside production', () => {
+    const policy = resolveCorsPolicy({ env: 'development', origins: ['http://insecure.example.com'] });
+    expect(policy.allow('http://insecure.example.com')).toBe(true);
+  });
+});
+
 describe('resolveCorsPolicy — production allows only the listed origins', () => {
   const policy = resolveCorsPolicy({
     env: 'production',

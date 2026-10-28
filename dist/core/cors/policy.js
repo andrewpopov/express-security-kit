@@ -81,6 +81,14 @@ function resolveCorsPolicy(config) {
             '(set `origins` and/or `originsCsv`) — refusing to start with an ' +
             'empty allowlist');
     }
+    if (isProd) {
+        for (const origin of set) {
+            if (!origin.startsWith('https://')) {
+                throw new Error(`resolveCorsPolicy: CORS origin "${origin}" is not https:// — ` +
+                    'production origins must use HTTPS');
+            }
+        }
+    }
     const origins = Object.freeze(Array.from(set));
     function safeOnReject(origin) {
         if (!onReject) {

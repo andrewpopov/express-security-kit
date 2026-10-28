@@ -139,6 +139,17 @@ export function resolveCorsPolicy(config: CorsPolicyConfig): CorsPolicy {
     );
   }
 
+  if (isProd) {
+    for (const origin of set) {
+      if (!origin.startsWith('https://')) {
+        throw new Error(
+          `resolveCorsPolicy: CORS origin "${origin}" is not https:// — ` +
+            'production origins must use HTTPS',
+        );
+      }
+    }
+  }
+
   const origins = Object.freeze(Array.from(set));
 
   function safeOnReject(origin: string): void {

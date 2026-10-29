@@ -5,6 +5,13 @@
 - resolveCorsPolicy now throws in production when any configured origin is not `https://`
   Previously only an empty production allowlist failed closed; `http://insecure.example.com` was accepted. The error names the offending origin. No loopback exception (matches sano-os's former local check); non-production is unchanged.
 
+## 2.0.2
+
+- Installing from git no longer runs a full dependency install: the `prepare` script is gone (run `npm run hooks` once after cloning) and `build` is now `compile`
+  Installing from git no longer runs a full dependency install: the `prepare` script is gone (run `npm run hooks` once after cloning) and `build` is now `compile`.
+- Update shared release notes tooling
+  Refresh the shared release notes package pins and lockfiles. Full release verification and production rollout remain with the next release candidate.
+
 ## 2.0.1
 
 - MemoryRateLimitStore evicts idle buckets on its own clock, so an injected or pinned limiter clock no longer resets counters

@@ -171,7 +171,7 @@ Items already flagged in code/CHANGELOG that deserve guardrails or louder docs:
   visibility, no build-on-install questions) vs staying on github: tags
   (zero-infra, current fleet convention per BWK-84/85). Either is fine; the
   gate is writing the decision down and, if github:, adding a CI check that the
-  tagged commit's `dist/` is fresh (`npm run build && git diff --exit-code dist`).
+  tagged commit's `dist/` is fresh (`npm run compile && git diff --exit-code dist`).
 - **SemVer + advisory policy**: one README paragraph — pre-1.0 minor bumps may
   break; post-1.0 strict SemVer; security fixes are patched on the latest minor
   only; advisories via GitHub Security Advisories on this repo.

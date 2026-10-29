@@ -40,7 +40,7 @@ let tarballPath;
 
 try {
   console.log('[verify:pack] Building...');
-  run('npm', ['run', 'build'], { cwd: pkgRoot, stdio: 'inherit' });
+  run('npm', ['run', 'compile'], { cwd: pkgRoot, stdio: 'inherit' });
 
   console.log('[verify:pack] Checking core/ stays framework-agnostic...');
   run('node', ['scripts/check-core-agnostic.mjs'], { cwd: pkgRoot, stdio: 'inherit' });

@@ -105,8 +105,8 @@
     }
   },
   "devDependencies": {
-    "@andrewpopov/deploy-kit": "github:andrewpopov/deploy-kit#v0.37.1",
-    "@andrewpopov/release-kit": "github:andrewpopov/release-kit#v0.7.1",
+    "@andrewpopov/deploy-kit": "0.37.1",
+    "@andrewpopov/release-kit": "0.7.1",
     "@fastify/cors": "^11.3.0",
     "@types/cors": "^2.8.19",
     "@types/express": "^4.17.21",
